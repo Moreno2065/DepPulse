@@ -1,0 +1,721 @@
+{
+  "version": "2.1.0",
+  "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "DepPulse",
+          "version": "0.1.0",
+          "informationUri": "https://github.com/deppulse/deppulse",
+          "rules": [
+            {
+              "id": "internal-dependency",
+              "name": "InternalDependency",
+              "shortDescription": {
+                "text": "Internal module dependency detected"
+              },
+              "fullDescription": {
+                "text": "A file depends on another internal module in the project."
+              },
+              "defaultConfiguration": {
+                "level": "note"
+              },
+              "properties": {
+                "tags": [
+                  "internal",
+                  "dependency"
+                ]
+              }
+            },
+            {
+              "id": "external-dependency",
+              "name": "ExternalDependency",
+              "shortDescription": {
+                "text": "External package dependency detected"
+              },
+              "fullDescription": {
+                "text": "A file depends on an external package that is not part of the project."
+              },
+              "defaultConfiguration": {
+                "level": "warning"
+              },
+              "properties": {
+                "tags": [
+                  "external",
+                  "dependency"
+                ]
+              }
+            },
+            {
+              "id": "unresolved-dependency",
+              "name": "UnresolvedDependency",
+              "shortDescription": {
+                "text": "Unresolved dependency detected"
+              },
+              "fullDescription": {
+                "text": "A file has a dependency that could not be resolved to any known module."
+              },
+              "defaultConfiguration": {
+                "level": "error"
+              },
+              "properties": {
+                "tags": [
+                  "unresolved",
+                  "dependency"
+                ]
+              }
+            },
+            {
+              "id": "dependency-cycle",
+              "name": "DependencyCycle",
+              "shortDescription": {
+                "text": "Circular dependency detected"
+              },
+              "fullDescription": {
+                "text": "Files form a circular dependency chain, which can cause maintenance issues."
+              },
+              "defaultConfiguration": {
+                "level": "warning"
+              },
+              "properties": {
+                "tags": [
+                  "cycle",
+                  "dependency"
+                ]
+              }
+            }
+          ]
+        }
+      },
+      "results": [
+        {
+          "ruleId": "internal-dependency",
+          "level": "note",
+          "message": {
+            "text": "Depends on internal module: cycle_b.py"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "app.py"
+                },
+                "region": {
+                  "startLine": 6
+                }
+              }
+            }
+          ],
+          "properties": {
+            "dependency": "cycle_b.py",
+            "kind": "import"
+          }
+        },
+        {
+          "ruleId": "external-dependency",
+          "level": "warning",
+          "message": {
+            "text": "External dependency: import os as _os"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "app.py"
+                },
+                "region": {
+                  "startLine": 7
+                }
+              }
+            }
+          ],
+          "properties": {
+            "dependency": "import os as _os",
+            "kind": "import",
+            "isStdlib": true
+          }
+        },
+        {
+          "ruleId": "internal-dependency",
+          "level": "note",
+          "message": {
+            "text": "Depends on internal module: cycle_b.py"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "cycle_a.py"
+                },
+                "region": {
+                  "startLine": 4
+                }
+              }
+            }
+          ],
+          "properties": {
+            "dependency": "cycle_b.py",
+            "kind": "import"
+          }
+        },
+        {
+          "ruleId": "external-dependency",
+          "level": "warning",
+          "message": {
+            "text": "External dependency: from . import app"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "cycle_a.py"
+                },
+                "region": {
+                  "startLine": 3
+                }
+              }
+            }
+          ],
+          "properties": {
+            "dependency": "from . import app",
+            "kind": "import",
+            "isStdlib": false
+          }
+        },
+        {
+          "ruleId": "unresolved-dependency",
+          "level": "error",
+          "message": {
+            "text": "Unresolved dependency: from . import app"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "cycle_a.py"
+                },
+                "region": {
+                  "startLine": 3
+                }
+              }
+            }
+          ],
+          "properties": {
+            "dependency": "from . import app",
+            "kind": "import",
+            "note": "relative import unresolved:  (level=1)"
+          }
+        },
+        {
+          "ruleId": "internal-dependency",
+          "level": "note",
+          "message": {
+            "text": "Depends on internal module: cycle_a.py"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "cycle_b.py"
+                },
+                "region": {
+                  "startLine": 3
+                }
+              }
+            }
+          ],
+          "properties": {
+            "dependency": "cycle_a.py",
+            "kind": "import"
+          }
+        },
+        {
+          "ruleId": "internal-dependency",
+          "level": "note",
+          "message": {
+            "text": "Depends on internal module: utils/helpers.py"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "main.py"
+                },
+                "region": {
+                  "startLine": 3
+                }
+              }
+            }
+          ],
+          "properties": {
+            "dependency": "utils/helpers.py",
+            "kind": "import"
+          }
+        },
+        {
+          "ruleId": "internal-dependency",
+          "level": "note",
+          "message": {
+            "text": "Depends on internal module: utils/__init__.py"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "main.py"
+                },
+                "region": {
+                  "startLine": 4
+                }
+              }
+            }
+          ],
+          "properties": {
+            "dependency": "utils/__init__.py",
+            "kind": "import"
+          }
+        },
+        {
+          "ruleId": "internal-dependency",
+          "level": "note",
+          "message": {
+            "text": "Depends on internal module: models/user.py"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "main.py"
+                },
+                "region": {
+                  "startLine": 9
+                }
+              }
+            }
+          ],
+          "properties": {
+            "dependency": "models/user.py",
+            "kind": "import"
+          }
+        },
+        {
+          "ruleId": "external-dependency",
+          "level": "warning",
+          "message": {
+            "text": "External dependency: import json"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "main.py"
+                },
+                "region": {
+                  "startLine": 5
+                }
+              }
+            }
+          ],
+          "properties": {
+            "dependency": "import json",
+            "kind": "import",
+            "isStdlib": true
+          }
+        },
+        {
+          "ruleId": "external-dependency",
+          "level": "warning",
+          "message": {
+            "text": "External dependency: from typing import Optional"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "models/profile.py"
+                },
+                "region": {
+                  "startLine": 3
+                }
+              }
+            }
+          ],
+          "properties": {
+            "dependency": "from typing import Optional",
+            "kind": "import",
+            "isStdlib": true
+          }
+        },
+        {
+          "ruleId": "internal-dependency",
+          "level": "note",
+          "message": {
+            "text": "Depends on internal module: utils/helpers.py"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "models/user.py"
+                },
+                "region": {
+                  "startLine": 3
+                }
+              }
+            }
+          ],
+          "properties": {
+            "dependency": "utils/helpers.py",
+            "kind": "import"
+          }
+        },
+        {
+          "ruleId": "internal-dependency",
+          "level": "note",
+          "message": {
+            "text": "Depends on internal module: models/profile.py"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "models/user.py"
+                },
+                "region": {
+                  "startLine": 4
+                }
+              }
+            }
+          ],
+          "properties": {
+            "dependency": "models/profile.py",
+            "kind": "import"
+          }
+        },
+        {
+          "ruleId": "internal-dependency",
+          "level": "note",
+          "message": {
+            "text": "Depends on internal module: services/api.py"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "models/user.py"
+                },
+                "region": {
+                  "startLine": 5
+                }
+              }
+            }
+          ],
+          "properties": {
+            "dependency": "services/api.py",
+            "kind": "import"
+          }
+        },
+        {
+          "ruleId": "external-dependency",
+          "level": "warning",
+          "message": {
+            "text": "External dependency: import typing"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "models/user.py"
+                },
+                "region": {
+                  "startLine": 6
+                }
+              }
+            }
+          ],
+          "properties": {
+            "dependency": "import typing",
+            "kind": "import",
+            "isStdlib": true
+          }
+        },
+        {
+          "ruleId": "external-dependency",
+          "level": "warning",
+          "message": {
+            "text": "External dependency: import collections"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "models/user.py"
+                },
+                "region": {
+                  "startLine": 7
+                }
+              }
+            }
+          ],
+          "properties": {
+            "dependency": "import collections",
+            "kind": "import",
+            "isStdlib": true
+          }
+        },
+        {
+          "ruleId": "internal-dependency",
+          "level": "note",
+          "message": {
+            "text": "Depends on internal module: models/user.py"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "models/__init__.py"
+                },
+                "region": {
+                  "startLine": 3
+                }
+              }
+            }
+          ],
+          "properties": {
+            "dependency": "models/user.py",
+            "kind": "import"
+          }
+        },
+        {
+          "ruleId": "external-dependency",
+          "level": "warning",
+          "message": {
+            "text": "External dependency: from typing import Any"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "services/api.py"
+                },
+                "region": {
+                  "startLine": 3
+                }
+              }
+            }
+          ],
+          "properties": {
+            "dependency": "from typing import Any",
+            "kind": "import",
+            "isStdlib": true
+          }
+        },
+        {
+          "ruleId": "external-dependency",
+          "level": "warning",
+          "message": {
+            "text": "External dependency: import json as _json"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "services/api.py"
+                },
+                "region": {
+                  "startLine": 4
+                }
+              }
+            }
+          ],
+          "properties": {
+            "dependency": "import json as _json",
+            "kind": "import",
+            "isStdlib": true
+          }
+        },
+        {
+          "ruleId": "internal-dependency",
+          "level": "note",
+          "message": {
+            "text": "Depends on internal module: services/api.py"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "services/__init__.py"
+                },
+                "region": {
+                  "startLine": 3
+                }
+              }
+            }
+          ],
+          "properties": {
+            "dependency": "services/api.py",
+            "kind": "import"
+          }
+        },
+        {
+          "ruleId": "external-dependency",
+          "level": "warning",
+          "message": {
+            "text": "External dependency: import hashlib as _hm"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "utils/helpers.py"
+                },
+                "region": {
+                  "startLine": 3
+                }
+              }
+            }
+          ],
+          "properties": {
+            "dependency": "import hashlib as _hm",
+            "kind": "import",
+            "isStdlib": true
+          }
+        },
+        {
+          "ruleId": "internal-dependency",
+          "level": "note",
+          "message": {
+            "text": "Depends on internal module: utils/helpers.py"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "utils/__init__.py"
+                },
+                "region": {
+                  "startLine": 3
+                }
+              }
+            }
+          ],
+          "properties": {
+            "dependency": "utils/helpers.py",
+            "kind": "import"
+          }
+        },
+        {
+          "ruleId": "dependency-cycle",
+          "level": "warning",
+          "message": {
+            "text": "Circular dependency detected: cycle_a.py -> cycle_b.py"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "cycle_a.py"
+                }
+              }
+            }
+          ],
+          "properties": {
+            "cycleIndex": 1,
+            "cycleLength": 2,
+            "cycleNodes": [
+              "cycle_a.py",
+              "cycle_b.py"
+            ]
+          }
+        }
+      ],
+      "files": {
+        "app.py": {
+          "uri": "app.py",
+          "properties": {
+            "language": "python",
+            "sizeBytes": 246
+          }
+        },
+        "broken_syntax.py": {
+          "uri": "broken_syntax.py",
+          "properties": {
+            "language": "python",
+            "sizeBytes": 143
+          }
+        },
+        "cycle_a.py": {
+          "uri": "cycle_a.py",
+          "properties": {
+            "language": "python",
+            "sizeBytes": 167
+          }
+        },
+        "cycle_b.py": {
+          "uri": "cycle_b.py",
+          "properties": {
+            "language": "python",
+            "sizeBytes": 132
+          }
+        },
+        "main.py": {
+          "uri": "main.py",
+          "properties": {
+            "language": "python",
+            "sizeBytes": 569
+          }
+        },
+        "models/profile.py": {
+          "uri": "models/profile.py",
+          "properties": {
+            "language": "python",
+            "sizeBytes": 281
+          }
+        },
+        "models/user.py": {
+          "uri": "models/user.py",
+          "properties": {
+            "language": "python",
+            "sizeBytes": 521
+          }
+        },
+        "models/__init__.py": {
+          "uri": "models/__init__.py",
+          "properties": {
+            "language": "python",
+            "sizeBytes": 71
+          }
+        },
+        "services/api.py": {
+          "uri": "services/api.py",
+          "properties": {
+            "language": "python",
+            "sizeBytes": 429
+          }
+        },
+        "services/__init__.py": {
+          "uri": "services/__init__.py",
+          "properties": {
+            "language": "python",
+            "sizeBytes": 82
+          }
+        },
+        "utils/helpers.py": {
+          "uri": "utils/helpers.py",
+          "properties": {
+            "language": "python",
+            "sizeBytes": 386
+          }
+        },
+        "utils/__init__.py": {
+          "uri": "utils/__init__.py",
+          "properties": {
+            "language": "python",
+            "sizeBytes": 144
+          }
+        }
+      }
+    }
+  ]
+}

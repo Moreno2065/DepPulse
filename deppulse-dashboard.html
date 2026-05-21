@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DepPulse — Dependency Dashboard</title>
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: #0f1419;
+    color: #e6edf3;
+    overflow: hidden;
+  }
+  #header {
+    position: fixed; top: 0; left: 0; right: 0;
+    height: 48px;
+    background: rgba(15,20,25,0.95);
+    border-bottom: 1px solid #30363d;
+    display: flex; align-items: center; padding: 0 16px;
+    gap: 24px;
+    z-index: 100;
+  }
+  #header h1 {
+    font-size: 16px; font-weight: 600; color: #58a6ff;
+  }
+  #stats {
+    font-size: 12px; color: #8b949e;
+    display: flex; gap: 16px;
+  }
+  #stats span { display: flex; align-items: center; gap: 4px; }
+  #stats .val { color: #e6edf3; font-weight: 500; }
+  #graph-container {
+    position: fixed; top: 48px; left: 0; right: 0; bottom: 0;
+  }
+  svg {
+    width: 100%; height: 100%; display: block;
+  }
+  .node circle {
+    stroke: rgba(255,255,255,0.2);
+    stroke-width: 1.5px;
+    cursor: pointer;
+    transition: r 0.2s;
+  }
+  .node circle:hover {
+    stroke: #fff;
+    stroke-width: 2px;
+  }
+  .node text {
+    font-size: 9px;
+    fill: #e6edf3;
+    text-anchor: middle;
+    pointer-events: none;
+    dominant-baseline: middle;
+  }
+  .link {
+    stroke: #30363d;
+    stroke-opacity: 0.5;
+    stroke-width: 1px;
+  }
+  .link:hover {
+    stroke: #58a6ff;
+    stroke-opacity: 1;
+  }
+  #tooltip {
+    position: fixed;
+    background: rgba(22,27,34,0.97);
+    border: 1px solid #30363d;
+    border-radius: 6px;
+    padding: 8px 12px;
+    font-size: 12px;
+    pointer-events: none;
+    display: none;
+    z-index: 200;
+    max-width: 280px;
+  }
+  #tooltip .path { color: #58a6ff; word-break: break-all; font-family: monospace; font-size: 11px; }
+  #tooltip .meta { margin-top: 4px; color: #8b949e; }
+  #tooltip .lang { display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 10px; }
+  #legend {
+    position: fixed; bottom: 16px; right: 16px;
+    background: rgba(22,27,34,0.9);
+    border: 1px solid #30363d;
+    border-radius: 6px;
+    padding: 10px 14px;
+    font-size: 11px;
+    z-index: 100;
+  }
+  #legend .title { color: #8b949e; margin-bottom: 6px; font-weight: 500; }
+  #legend .item { display: flex; align-items: center; gap: 6px; margin: 3px 0; }
+  #legend .dot {
+    width: 10px; height: 10px; border-radius: 50%;
+    flex-shrink: 0;
+  }
+  #controls {
+    position: fixed; top: 56px; left: 16px;
+    background: rgba(22,27,34,0.9);
+    border: 1px solid #30363d;
+    border-radius: 6px;
+    padding: 10px 14px;
+    font-size: 11px;
+    z-index: 100;
+    display: flex; flex-direction: column; gap: 8px;
+    min-width: 160px;
+  }
+  #controls .title { color: #8b949e; font-weight: 500; margin-bottom: 2px; }
+  #controls button {
+    background: #21262d; color: #c9d1d9; border: 1px solid #30363d;
+    border-radius: 4px; padding: 4px 8px; font-size: 11px; cursor: pointer;
+    transition: background 0.15s;
+  }
+  #controls button:hover { background: #30363d; }
+  #info-panel {
+    position: fixed; top: 56px; right: 16px;
+    width: 260px;
+    background: rgba(22,27,34,0.95);
+    border: 1px solid #30363d;
+    border-radius: 6px;
+    padding: 12px;
+    font-size: 12px;
+    z-index: 100;
+    display: none;
+  }
+  #info-panel h3 { color: #58a6ff; font-size: 13px; margin-bottom: 8px; }
+  #info-panel .row { display: flex; justify-content: space-between; margin: 4px 0; color: #8b949e; }
+  #info-panel .row .v { color: #e6edf3; }
+</style>
+</head>
+<body>
+<div id="header">
+  <h1>DepPulse</h1>
+  <div id="stats">
+    <span><span class="val" id="stat-nodes">0</span> files</span>
+    <span><span class="val" id="stat-edges">0</span> deps</span>
+    <span><span class="val" id="stat-python">0</span> Python</span>
+    <span><span class="val" id="stat-java">0</span> Java</span>
+    <span><span class="val" id="stat-kotlin">0</span> Kotlin</span>
+  </div>
+</div>
+
+<div id="controls">
+  <div class="title">Controls</div>
+  <button id="btn-zoom-in">Zoom In</button>
+  <button id="btn-zoom-out">Zoom Out</button>
+  <button id="btn-reset">Reset View</button>
+</div>
+
+<div id="graph-container"></div>
+
+<div id="tooltip">
+  <div class="path"></div>
+  <div class="meta">
+    <span class="lang"></span>
+    <span class="deg"></span>
+  </div>
+</div>
+
+<div id="legend">
+  <div class="title">Language</div>
+  <div class="item"><div class="dot" style="background:#4B8BBE"></div> Python</div>
+  <div class="item"><div class="dot" style="background:#B07219"></div> Java</div>
+  <div class="item"><div class="dot" style="background:#A18B00"></div> Kotlin</div>
+  <div class="item"><div class="dot" style="background:#F34B7D"></div> C/C++</div>
+  <div class="item"><div class="dot" style="background:#AAAAAA"></div> Other</div>
+</div>
+
+<script>
+const DATA = {
+  nodes: [{"id": "deppulse/cache.py", "name": "cache.py", "lang": "python", "lang_color": "#4B8BBE", "group": "python", "size": 7, "in_deg": 4, "out_deg": 0}, {"id": "deppulse/cli.py", "name": "cli.py", "lang": "python", "lang_color": "#4B8BBE", "group": "python", "size": 4, "in_deg": 1, "out_deg": 13}, {"id": "deppulse/config.py", "name": "config.py", "lang": "python", "lang_color": "#4B8BBE", "group": "python", "size": 7, "in_deg": 4, "out_deg": 0}, {"id": "deppulse/git.py", "name": "git.py", "lang": "python", "lang_color": "#4B8BBE", "group": "python", "size": 5, "in_deg": 2, "out_deg": 0}, {"id": "deppulse/models.py", "name": "models.py", "lang": "python", "lang_color": "#4B8BBE", "group": "python", "size": 20, "in_deg": 25, "out_deg": 0}, {"id": "deppulse/__init__.py", "name": "__init__.py", "lang": "python", "lang_color": "#4B8BBE", "group": "python", "size": 5, "in_deg": 2, "out_deg": 0}, {"id": "deppulse/__main__.py", "name": "__main__.py", "lang": "python", "lang_color": "#4B8BBE", "group": "python", "size": 4, "in_deg": 0, "out_deg": 1}, {"id": "deppulse/core/analyzer.py", "name": "analyzer.py", "lang": "python", "lang_color": "#4B8BBE", "group": "python", "size": 5, "in_deg": 2, "out_deg": 1}, {"id": "deppulse/core/callgraph.py", "name": "callgraph.py", "lang": "python", "lang_color": "#4B8BBE", "group": "python", "size": 5, "in_deg": 2, "out_deg": 1}, {"id": "deppulse/core/cycles.py", "name": "cycles.py", "lang": "python", "lang_color": "#4B8BBE", "group": "python", "size": 5, "in_deg": 2, "out_deg": 1}, {"id": "deppulse/core/orchestrator.py", "name": "orchestrator.py", "lang": "python", "lang_color": "#4B8BBE", "group": "python", "size": 11, "in_deg": 8, "out_deg": 8}, {"id": "deppulse/core/risk.py", "name": "risk.py", "lang": "python", "lang_color": "#4B8BBE", "group": "python", "size": 5, "in_deg": 2, "out_deg": 1}, {"id": "deppulse/core/__init__.py", "name": "__init__.py", "lang": "python", "lang_color": "#4B8BBE", "group": "python", "size": 4, "in_deg": 0, "out_deg": 0}, {"id": "deppulse/reporting/legacy.py", "name": "legacy.py", "lang": "python", "lang_color": "#4B8BBE", "group": "python", "size": 4, "in_deg": 1, "out_deg": 1}, {"id": "deppulse/reporting/sarif.py", "name": "sarif.py", "lang": "python", "lang_color": "#4B8BBE", "group": "python", "size": 5, "in_deg": 2, "out_deg": 2}, {"id": "deppulse/reporting/__init__.py", "name": "__init__.py", "lang": "python", "lang_color": "#4B8BBE", "group": "python", "size": 5, "in_deg": 2, "out_deg": 2}, {"id": "deppulse/scanners/base.py", "name": "base.py", "lang": "python", "lang_color": "#4B8BBE", "group": "python", "size": 8, "in_deg": 5, "out_deg": 1}, {"id": "deppulse/scanners/cpp_scanner.py", "name": "cpp_scanner.py", "lang": "python", "lang_color": "#4B8BBE", "group": "python", "size": 5, "in_deg": 2, "out_deg": 2}, {"id": "deppulse/scanners/java_scanner.py", "name": "java_scanner.py", "lang": "python", "lang_color": "#4B8BBE", "group": "python", "size": 5, "in_deg": 2, "out_deg": 2}, {"id": "deppulse/scanners/kotlin_scanner.py", "name": "kotlin_scanner.py", "lang": "python", "lang_color": "#4B8BBE", "group": "python", "size": 5, "in_deg": 2, "out_deg": 2}, {"id": "deppulse/scanners/python_scanner.py", "name": "python_scanner.py", "lang": "python", "lang_color": "#4B8BBE", "group": "python", "size": 5, "in_deg": 2, "out_deg": 2}, {"id": "deppulse/scanners/__init__.py", "name": "__init__.py", "lang": "python", "lang_color": "#4B8BBE", "group": "python", "size": 4, "in_deg": 0, "out_deg": 0}, {"id": "deppulse/ui/render.py", "name": "render.py", "lang": "python", "lang_color": "#4B8BBE", "group": "python", "size": 4, "in_deg": 0, "out_deg": 2}, {"id": "deppulse/ui/visualize.py", "name": "visualize.py", "lang": "python", "lang_color": "#4B8BBE", "group": "python", "size": 4, "in_deg": 1, "out_deg": 1}, {"id": "deppulse/ui/__init__.py", "name": "__init__.py", "lang": "python", "lang_color": "#4B8BBE", "group": "python", "size": 4, "in_deg": 1, "out_deg": 0}, {"id": "tests/conftest.py", "name": "conftest.py", "lang": "python", "lang_color": "#4B8BBE", "group": "python", "size": 4, "in_deg": 0, "out_deg": 0}, {"id": "tests/test_analyzer.py", "name": "test_analyzer.py", "lang": "python", "lang_color": "#4B8BBE", "group": "python", "size": 4, "in_deg": 0, "out_deg": 3}, {"id": "tests/test_cache.py", "name": "test_cache.py", "lang": "python", "lang_color": "#4B8BBE", "group": "python", "size": 4, "in_deg": 0, "out_deg": 1}, {"id": "tests/test_callgraph.py", "name": "test_callgraph.py", "lang": "python", "lang_color": "#4B8BBE", "group": "python", "size": 4, "in_deg": 0, "out_deg": 2}, {"id": "tests/test_cpp_scanner.py", "name": "test_cpp_scanner.py", "lang": "python", "lang_color": "#4B8BBE", "group": "python", "size": 4, "in_deg": 0, "out_deg": 2}, {"id": "tests/test_cycles.py", "name": "test_cycles.py", "lang": "python", "lang_color": "#4B8BBE", "group": "python", "size": 4, "in_deg": 0, "out_deg": 3}, {"id": "tests/test_git.py", "name": "test_git.py", "lang": "python", "lang_color": "#4B8BBE", "group": "python", "size": 4, "in_deg": 0, "out_deg": 1}, {"id": "tests/test_incremental.py", "name": "test_incremental.py", "lang": "python", "lang_color": "#4B8BBE", "group": "python", "size": 4, "in_deg": 0, "out_deg": 2}, {"id": "tests/test_java_scanner.py", "name": "test_java_scanner.py", "lang": "python", "lang_color": "#4B8BBE", "group": "python", "size": 4, "in_deg": 0, "out_deg": 2}, {"id": "tests/test_kotlin_scanner.py", "name": "test_kotlin_scanner.py", "lang": "python", "lang_color": "#4B8BBE", "group": "python", "size": 4, "in_deg": 0, "out_deg": 2}, {"id": "tests/test_orchestrator.py", "name": "test_orchestrator.py", "lang": "python", "lang_color": "#4B8BBE", "group": "python", "size": 4, "in_deg": 0, "out_deg": 4}, {"id": "tests/test_python_scanner.py", "name": "test_python_scanner.py", "lang": "python", "lang_color": "#4B8BBE", "group": "python", "size": 4, "in_deg": 0, "out_deg": 2}, {"id": "tests/test_risk.py", "name": "test_risk.py", "lang": "python", "lang_color": "#4B8BBE", "group": "python", "size": 4, "in_deg": 0, "out_deg": 3}, {"id": "tests/test_sarif.py", "name": "test_sarif.py", "lang": "python", "lang_color": "#4B8BBE", "group": "python", "size": 4, "in_deg": 0, "out_deg": 4}, {"id": "tests/__init__.py", "name": "__init__.py", "lang": "python", "lang_color": "#4B8BBE", "group": "python", "size": 4, "in_deg": 0, "out_deg": 0}, {"id": "tests/fixtures/mixed_project/app.py", "name": "app.py", "lang": "python", "lang_color": "#4B8BBE", "group": "python", "size": 4, "in_deg": 0, "out_deg": 0}, {"id": "tests/fixtures/mixed_project/logger.c", "name": "logger.c", "lang": "cpp", "lang_color": "#F34B7D", "group": "cpp", "size": 4, "in_deg": 0, "out_deg": 1}, {"id": "tests/fixtures/mixed_project/logger.h", "name": "logger.h", "lang": "cpp", "lang_color": "#F34B7D", "group": "cpp", "size": 5, "in_deg": 2, "out_deg": 0}, {"id": "tests/fixtures/mixed_project/math_utils.c", "name": "math_utils.c", "lang": "cpp", "lang_color": "#F34B7D", "group": "cpp", "size": 4, "in_deg": 0, "out_deg": 2}, {"id": "tests/fixtures/mixed_project/math_utils.h", "name": "math_utils.h", "lang": "cpp", "lang_color": "#F34B7D", "group": "cpp", "size": 4, "in_deg": 1, "out_deg": 1}, {"id": "tests/fixtures/mixed_project/types.h", "name": "types.h", "lang": "cpp", "lang_color": "#F34B7D", "group": "cpp", "size": 4, "in_deg": 1, "out_deg": 0}, {"id": "tests/fixtures/mixed_project/utils/config.py", "name": "config.py", "lang": "python", "lang_color": "#4B8BBE", "group": "python", "size": 4, "in_deg": 1, "out_deg": 0}, {"id": "tests/fixtures/mixed_project/utils/math_utils.py", "name": "math_utils.py", "lang": "python", "lang_color": "#4B8BBE", "group": "python", "size": 4, "in_deg": 1, "out_deg": 0}, {"id": "tests/fixtures/mixed_project/utils/__init__.py", "name": "__init__.py", "lang": "python", "lang_color": "#4B8BBE", "group": "python", "size": 4, "in_deg": 0, "out_deg": 2}, {"id": "tests/fixtures/python_project/app.py", "name": "app.py", "lang": "python", "lang_color": "#4B8BBE", "group": "python", "size": 4, "in_deg": 0, "out_deg": 1}, {"id": "tests/fixtures/python_project/broken_syntax.py", "name": "broken_syntax.py", "lang": "python", "lang_color": "#4B8BBE", "group": "python", "size": 4, "in_deg": 0, "out_deg": 0}, {"id": "tests/fixtures/python_project/cycle_a.py", "name": "cycle_a.py", "lang": "python", "lang_color": "#4B8BBE", "group": "python", "size": 4, "in_deg": 1, "out_deg": 1}, {"id": "tests/fixtures/python_project/cycle_b.py", "name": "cycle_b.py", "lang": "python", "lang_color": "#4B8BBE", "group": "python", "size": 5, "in_deg": 2, "out_deg": 1}, {"id": "tests/fixtures/python_project/main.py", "name": "main.py", "lang": "python", "lang_color": "#4B8BBE", "group": "python", "size": 4, "in_deg": 0, "out_deg": 0}, {"id": "tests/fixtures/python_project/models/profile.py", "name": "profile.py", "lang": "python", "lang_color": "#4B8BBE", "group": "python", "size": 4, "in_deg": 1, "out_deg": 0}, {"id": "tests/fixtures/python_project/models/user.py", "name": "user.py", "lang": "python", "lang_color": "#4B8BBE", "group": "python", "size": 4, "in_deg": 1, "out_deg": 2}, {"id": "tests/fixtures/python_project/models/__init__.py", "name": "__init__.py", "lang": "python", "lang_color": "#4B8BBE", "group": "python", "size": 4, "in_deg": 0, "out_deg": 1}, {"id": "tests/fixtures/python_project/services/api.py", "name": "api.py", "lang": "python", "lang_color": "#4B8BBE", "group": "python", "size": 5, "in_deg": 2, "out_deg": 0}, {"id": "tests/fixtures/python_project/services/__init__.py", "name": "__init__.py", "lang": "python", "lang_color": "#4B8BBE", "group": "python", "size": 4, "in_deg": 0, "out_deg": 1}, {"id": "tests/fixtures/python_project/utils/helpers.py", "name": "helpers.py", "lang": "python", "lang_color": "#4B8BBE", "group": "python", "size": 4, "in_deg": 1, "out_deg": 0}, {"id": "tests/fixtures/python_project/utils/__init__.py", "name": "__init__.py", "lang": "python", "lang_color": "#4B8BBE", "group": "python", "size": 4, "in_deg": 0, "out_deg": 1}],
+  edges: [{"source": "deppulse/cli.py", "target": "deppulse/__init__.py", "kind": "import", "line_number": 12}, {"source": "deppulse/cli.py", "target": "deppulse/cache.py", "kind": "import", "line_number": 13}, {"source": "deppulse/cli.py", "target": "deppulse/config.py", "kind": "import", "line_number": 14}, {"source": "deppulse/cli.py", "target": "deppulse/core/analyzer.py", "kind": "import", "line_number": 15}, {"source": "deppulse/cli.py", "target": "deppulse/core/cycles.py", "kind": "import", "line_number": 16}, {"source": "deppulse/cli.py", "target": "deppulse/core/orchestrator.py", "kind": "import", "line_number": 733}, {"source": "deppulse/cli.py", "target": "deppulse/core/risk.py", "kind": "import", "line_number": 18}, {"source": "deppulse/cli.py", "target": "deppulse/git.py", "kind": "import", "line_number": 19}, {"source": "deppulse/cli.py", "target": "deppulse/models.py", "kind": "import", "line_number": 594}, {"source": "deppulse/cli.py", "target": "deppulse/reporting/__init__.py", "kind": "import", "line_number": 337}, {"source": "deppulse/cli.py", "target": "deppulse/ui/__init__.py", "kind": "import", "line_number": 30}, {"source": "deppulse/cli.py", "target": "deppulse/core/callgraph.py", "kind": "import", "line_number": 623}, {"source": "deppulse/cli.py", "target": "deppulse/ui/visualize.py", "kind": "import", "line_number": 674}, {"source": "deppulse/__main__.py", "target": "deppulse/cli.py", "kind": "import", "line_number": 3}, {"source": "deppulse/core/analyzer.py", "target": "deppulse/models.py", "kind": "import", "line_number": 11}, {"source": "deppulse/core/callgraph.py", "target": "deppulse/models.py", "kind": "import", "line_number": 61}, {"source": "deppulse/core/cycles.py", "target": "deppulse/models.py", "kind": "import", "line_number": 10}, {"source": "deppulse/core/orchestrator.py", "target": "deppulse/cache.py", "kind": "import", "line_number": 14}, {"source": "deppulse/core/orchestrator.py", "target": "deppulse/config.py", "kind": "import", "line_number": 15}, {"source": "deppulse/core/orchestrator.py", "target": "deppulse/models.py", "kind": "import", "line_number": 410}, {"source": "deppulse/core/orchestrator.py", "target": "deppulse/scanners/base.py", "kind": "import", "line_number": 25}, {"source": "deppulse/core/orchestrator.py", "target": "deppulse/scanners/cpp_scanner.py", "kind": "import", "line_number": 26}, {"source": "deppulse/core/orchestrator.py", "target": "deppulse/scanners/java_scanner.py", "kind": "import", "line_number": 27}, {"source": "deppulse/core/orchestrator.py", "target": "deppulse/scanners/kotlin_scanner.py", "kind": "import", "line_number": 28}, {"source": "deppulse/core/orchestrator.py", "target": "deppulse/scanners/python_scanner.py", "kind": "import", "line_number": 29}, {"source": "deppulse/core/risk.py", "target": "deppulse/models.py", "kind": "import", "line_number": 10}, {"source": "deppulse/reporting/legacy.py", "target": "deppulse/models.py", "kind": "import", "line_number": 12}, {"source": "deppulse/reporting/sarif.py", "target": "deppulse/__init__.py", "kind": "import", "line_number": 10}, {"source": "deppulse/reporting/sarif.py", "target": "deppulse/models.py", "kind": "import", "line_number": 11}, {"source": "deppulse/reporting/__init__.py", "target": "deppulse/reporting/legacy.py", "kind": "import", "line_number": 10}, {"source": "deppulse/reporting/__init__.py", "target": "deppulse/reporting/sarif.py", "kind": "import", "line_number": 22}, {"source": "deppulse/scanners/base.py", "target": "deppulse/models.py", "kind": "import", "line_number": 75}, {"source": "deppulse/scanners/cpp_scanner.py", "target": "deppulse/models.py", "kind": "import", "line_number": 163}, {"source": "deppulse/scanners/cpp_scanner.py", "target": "deppulse/scanners/base.py", "kind": "import", "line_number": 16}, {"source": "deppulse/scanners/java_scanner.py", "target": "deppulse/models.py", "kind": "import", "line_number": 76}, {"source": "deppulse/scanners/java_scanner.py", "target": "deppulse/scanners/base.py", "kind": "import", "line_number": 17}, {"source": "deppulse/scanners/kotlin_scanner.py", "target": "deppulse/models.py", "kind": "import", "line_number": 196}, {"source": "deppulse/scanners/kotlin_scanner.py", "target": "deppulse/scanners/base.py", "kind": "import", "line_number": 17}, {"source": "deppulse/scanners/python_scanner.py", "target": "deppulse/models.py", "kind": "import", "line_number": 311}, {"source": "deppulse/scanners/python_scanner.py", "target": "deppulse/scanners/base.py", "kind": "import", "line_number": 19}, {"source": "deppulse/ui/render.py", "target": "deppulse/models.py", "kind": "import", "line_number": 516}, {"source": "deppulse/ui/render.py", "target": "deppulse/core/orchestrator.py", "kind": "import", "line_number": 194}, {"source": "deppulse/ui/visualize.py", "target": "deppulse/models.py", "kind": "import", "line_number": 16}, {"source": "tests/test_analyzer.py", "target": "deppulse/core/analyzer.py", "kind": "import", "line_number": 6}, {"source": "tests/test_analyzer.py", "target": "deppulse/core/orchestrator.py", "kind": "import", "line_number": 7}, {"source": "tests/test_analyzer.py", "target": "deppulse/models.py", "kind": "import", "line_number": 81}, {"source": "tests/test_cache.py", "target": "deppulse/cache.py", "kind": "import", "line_number": 10}, {"source": "tests/test_callgraph.py", "target": "deppulse/core/callgraph.py", "kind": "import", "line_number": 8}, {"source": "tests/test_callgraph.py", "target": "deppulse/models.py", "kind": "import", "line_number": 17}, {"source": "tests/test_cpp_scanner.py", "target": "deppulse/models.py", "kind": "import", "line_number": 9}, {"source": "tests/test_cpp_scanner.py", "target": "deppulse/scanners/cpp_scanner.py", "kind": "import", "line_number": 10}, {"source": "tests/test_cycles.py", "target": "deppulse/core/cycles.py", "kind": "import", "line_number": 8}, {"source": "tests/test_cycles.py", "target": "deppulse/core/orchestrator.py", "kind": "import", "line_number": 9}, {"source": "tests/test_cycles.py", "target": "deppulse/models.py", "kind": "import", "line_number": 104}, {"source": "tests/test_git.py", "target": "deppulse/git.py", "kind": "import", "line_number": 9}, {"source": "tests/test_incremental.py", "target": "deppulse/config.py", "kind": "import", "line_number": 7}, {"source": "tests/test_incremental.py", "target": "deppulse/core/orchestrator.py", "kind": "import", "line_number": 8}, {"source": "tests/test_java_scanner.py", "target": "deppulse/models.py", "kind": "import", "line_number": 9}, {"source": "tests/test_java_scanner.py", "target": "deppulse/scanners/java_scanner.py", "kind": "import", "line_number": 10}, {"source": "tests/test_kotlin_scanner.py", "target": "deppulse/models.py", "kind": "import", "line_number": 9}, {"source": "tests/test_kotlin_scanner.py", "target": "deppulse/scanners/kotlin_scanner.py", "kind": "import", "line_number": 10}, {"source": "tests/test_orchestrator.py", "target": "deppulse/cache.py", "kind": "import", "line_number": 8}, {"source": "tests/test_orchestrator.py", "target": "deppulse/config.py", "kind": "import", "line_number": 9}, {"source": "tests/test_orchestrator.py", "target": "deppulse/core/orchestrator.py", "kind": "import", "line_number": 10}, {"source": "tests/test_orchestrator.py", "target": "deppulse/models.py", "kind": "import", "line_number": 11}, {"source": "tests/test_python_scanner.py", "target": "deppulse/models.py", "kind": "import", "line_number": 12}, {"source": "tests/test_python_scanner.py", "target": "deppulse/scanners/python_scanner.py", "kind": "import", "line_number": 13}, {"source": "tests/test_risk.py", "target": "deppulse/core/risk.py", "kind": "import", "line_number": 6}, {"source": "tests/test_risk.py", "target": "deppulse/core/orchestrator.py", "kind": "import", "line_number": 7}, {"source": "tests/test_risk.py", "target": "deppulse/models.py", "kind": "import", "line_number": 74}, {"source": "tests/test_sarif.py", "target": "deppulse/core/orchestrator.py", "kind": "import", "line_number": 9}, {"source": "tests/test_sarif.py", "target": "deppulse/models.py", "kind": "import", "line_number": 245}, {"source": "tests/test_sarif.py", "target": "deppulse/reporting/__init__.py", "kind": "import", "line_number": 19}, {"source": "tests/test_sarif.py", "target": "deppulse/reporting/sarif.py", "kind": "import", "line_number": 20}, {"source": "tests/fixtures/mixed_project/logger.c", "target": "tests/fixtures/mixed_project/logger.h", "kind": "include_local", "line_number": 0}, {"source": "tests/fixtures/mixed_project/math_utils.c", "target": "tests/fixtures/mixed_project/math_utils.h", "kind": "include_local", "line_number": 0}, {"source": "tests/fixtures/mixed_project/math_utils.c", "target": "tests/fixtures/mixed_project/logger.h", "kind": "include_local", "line_number": 0}, {"source": "tests/fixtures/mixed_project/math_utils.h", "target": "tests/fixtures/mixed_project/types.h", "kind": "include_local", "line_number": 0}, {"source": "tests/fixtures/mixed_project/utils/__init__.py", "target": "tests/fixtures/mixed_project/utils/math_utils.py", "kind": "import", "line_number": 3}, {"source": "tests/fixtures/mixed_project/utils/__init__.py", "target": "tests/fixtures/mixed_project/utils/config.py", "kind": "import", "line_number": 4}, {"source": "tests/fixtures/python_project/app.py", "target": "tests/fixtures/python_project/cycle_b.py", "kind": "import", "line_number": 6}, {"source": "tests/fixtures/python_project/cycle_a.py", "target": "tests/fixtures/python_project/cycle_b.py", "kind": "import", "line_number": 4}, {"source": "tests/fixtures/python_project/cycle_b.py", "target": "tests/fixtures/python_project/cycle_a.py", "kind": "import", "line_number": 3}, {"source": "tests/fixtures/python_project/models/user.py", "target": "tests/fixtures/python_project/models/profile.py", "kind": "import", "line_number": 4}, {"source": "tests/fixtures/python_project/models/user.py", "target": "tests/fixtures/python_project/services/api.py", "kind": "import", "line_number": 5}, {"source": "tests/fixtures/python_project/models/__init__.py", "target": "tests/fixtures/python_project/models/user.py", "kind": "import", "line_number": 3}, {"source": "tests/fixtures/python_project/services/__init__.py", "target": "tests/fixtures/python_project/services/api.py", "kind": "import", "line_number": 3}, {"source": "tests/fixtures/python_project/utils/__init__.py", "target": "tests/fixtures/python_project/utils/helpers.py", "kind": "import", "line_number": 3}]
+};
+
+// Update stats
+document.getElementById('stat-nodes').textContent = DATA.nodes.length;
+document.getElementById('stat-edges').textContent = DATA.edges.length;
+const langCounts = {};
+DATA.nodes.forEach(n => { langCounts[n.lang] = (langCounts[n.lang] || 0) + 1; });
+if (langCounts.python) document.getElementById('stat-python').textContent = langCounts.python;
+if (langCounts.java) document.getElementById('stat-java').textContent = langCounts.java;
+if (langCounts.kotlin) document.getElementById('stat-kotlin').textContent = langCounts.kotlin;
+
+// Build id->index map
+const idMap = {};
+DATA.nodes.forEach((n, i) => { idMap[n.id] = i; });
+
+// D3 force-directed graph
+const container = document.getElementById('graph-container');
+const width = container.clientWidth;
+const height = container.clientHeight;
+
+const svg = d3.select('#graph-container')
+  .append('svg')
+  .attr('width', width)
+  .attr('height', height);
+
+const g = svg.append('g');
+
+const zoom = d3.zoom()
+  .scaleExtent([0.05, 4])
+  .on('zoom', (event) => { g.attr('transform', event.transform); });
+
+svg.call(zoom);
+
+const simulation = d3.forceSimulation(DATA.nodes)
+  .force('link', d3.forceLink(DATA.edges)
+    .id(d => d.id)
+    .distance(60)
+    .strength(0.3))
+  .force('charge', d3.forceManyBody().strength(-120))
+  .force('center', d3.forceCenter(width / 2, height / 2))
+  .force('collision', d3.forceCollide().radius(d => d.size + 4));
+
+const link = g.append('g')
+  .selectAll('.link')
+  .data(DATA.edges)
+  .join('line')
+  .attr('class', 'link')
+  .attr('title', d => `${d.source.id || d.source} → ${d.target.id || d.target} (${d.kind})`);
+
+const node = g.append('g')
+  .selectAll('.node')
+  .data(DATA.nodes)
+  .join('g')
+  .attr('class', 'node')
+  .call(d3.drag()
+    .on('start', (event, d) => {
+      if (!event.active) simulation.alphaTarget(0.3).restart();
+      d.fx = d.x; d.fy = d.y;
+    })
+    .on('drag', (event, d) => {
+      d.fx = event.x; d.fy = event.y;
+    })
+    .on('end', (event, d) => {
+      if (!event.active) simulation.alphaTarget(0);
+      d.fx = null; d.fy = null;
+    }));
+
+node.append('circle')
+  .attr('r', d => d.size)
+  .attr('fill', d => d.lang_color)
+  .attr('stroke', d => d.in_deg > 5 ? '#e74c3c' : 'rgba(255,255,255,0.15)');
+
+node.append('text')
+  .text(d => d.name.length > 14 ? d.name.slice(0, 12) + '..' : d.name)
+  .attr('dy', d => d.size + 10);
+
+const tooltip = document.getElementById('tooltip');
+
+node.on('mouseover', (event, d) => {
+  tooltip.style.display = 'block';
+  tooltip.style.left = (event.clientX + 12) + 'px';
+  tooltip.style.top = (event.clientY + 12) + 'px';
+  tooltip.querySelector('.path').textContent = d.id;
+  tooltip.querySelector('.lang').textContent = d.lang;
+  tooltip.querySelector('.lang').style.background = d.lang_color;
+  tooltip.querySelector('.deg').textContent = `in:${d.in_deg} out:${d.out_deg}`;
+});
+
+node.on('mousemove', (event) => {
+  tooltip.style.left = (event.clientX + 12) + 'px';
+  tooltip.style.top = (event.clientY + 12) + 'px';
+});
+
+node.on('mouseout', () => {
+  tooltip.style.display = 'none';
+});
+
+simulation.on('tick', () => {
+  link
+    .attr('x1', d => d.source.x)
+    .attr('y1', d => d.source.y)
+    .attr('x2', d => d.target.x)
+    .attr('y2', d => d.target.y);
+  node.attr('transform', d => `translate(${d.x},${d.y})`);
+});
+
+// Controls
+document.getElementById('btn-zoom-in').onclick = () => svg.transition().call(zoom.scaleBy, 1.3);
+document.getElementById('btn-zoom-out').onclick = () => svg.transition().call(zoom.scaleBy, 0.7);
+document.getElementById('btn-reset').onclick = () => svg.transition().call(zoom.transform, d3.zoomIdentity);
+
+// Resize handler
+window.addEventListener('resize', () => {
+  const w = container.clientWidth;
+  const h = container.clientHeight;
+  svg.attr('width', w).attr('height', h);
+  simulation.force('center', d3.forceCenter(w / 2, h / 2));
+  simulation.alpha(0.3).restart();
+});
+</script>
+</body>
+</html>

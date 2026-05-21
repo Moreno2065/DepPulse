@@ -1,0 +1,8 @@
+- id: deppulse-scan
+  name: DepPulse dependency scan
+  description: Scan for risky dependency changes before committing
+  entry: deppulse scan --json-output .deppulse/scan.json
+  language: system
+  files: '\.(py|java|kt|cpp|h|hpp)$'
+  pass_filenames: false
+  stages: [pre-commit, push]

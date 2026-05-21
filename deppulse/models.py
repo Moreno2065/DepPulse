@@ -1,0 +1,456 @@
+"""Strongly-typed dataclasses for all structured data in DepPulse."""
+
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass, field
+from datetime import datetime
+from enum import Enum
+from pathlib import PurePosixPath, PureWindowsPath
+from typing import Optional
+
+
+# ---------------------------------------------------------------------------
+# Enumerations
+# ---------------------------------------------------------------------------
+
+
+class DependencyKind(str, Enum):
+    """The nature of a dependency reference in source code."""
+
+    IMPORT = "import"          # Python: import x / from x import y
+    JAVA_IMPORT = "java_import"  # Java: import com.example.Utils;
+    KOTLIN_IMPORT = "kotlin_import"  # Kotlin: import com.example.Utils
+    INCLUDE_LOCAL = "include_local"   # C/C++: #include "local.h"
+    INCLUDE_SYSTEM = "include_system" # C/C++: #include <system>
+    UNKNOWN = "unknown"
+
+
+class Language(str, Enum):
+    """Supported programming languages."""
+
+    PYTHON = "python"
+    JAVA = "java"
+    KOTLIN = "kotlin"
+    CPP = "cpp"
+    UNKNOWN = "unknown"
+
+
+class RiskLevel(str, Enum):
+    """Risk severity classification."""
+
+    LOW = "LOW"
+    MEDIUM = "MEDIUM"
+    HIGH = "HIGH"
+
+
+class CycleSeverity(str, Enum):
+    """Severity of dependency cycles in a project."""
+
+    NONE = "NONE"
+    MINOR = "MINOR"      # few cycles, small files
+    MODERATE = "MODERATE"
+    SEVERE = "SEVERE"    # many cycles or large core files involved
+
+
+# ---------------------------------------------------------------------------
+# Dependency representations
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class RawDependency:
+    """
+    A dependency reference extracted directly from source code.
+
+    For Python, this captures the raw import statement text.
+    For C/C++, this captures the raw include directive text.
+    """
+
+    raw_text: str
+    kind: DependencyKind
+    line_number: int
+    column_offset: int = 0
+
+    def __post_init__(self) -> None:
+        self.raw_text = self.raw_text.strip()
+
+
+@dataclass
+class ResolvedDependency:
+    """
+    A dependency that has been resolved to a concrete project file path,
+    or classified as external/stdlib.
+    """
+
+    raw: RawDependency
+    normalized_path: Optional[str]  # project-relative POSIX path, or None
+    is_external: bool               # True if not a local project file
+    is_stdlib: bool                 # True if Python stdlib
+    is_unresolved: bool            # True if we could not resolve it
+    resolution_note: str = ""       # e.g. "ambiguous: found 2 matches"
+
+
+# ---------------------------------------------------------------------------
+# Scan result
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class ExtractedSymbol:
+    """A Python symbol (function, class, method) extracted from a module."""
+
+    symbol_type: str      # "function", "class", "method"
+    name: str
+    fully_qualified: str  # e.g. "function:foo", "class:MyClass", "method:MyClass.method"
+
+
+@dataclass
+class ScanResult:
+    """
+    Result of scanning a single file.
+
+    Contains all extracted dependencies, symbols, and any warnings
+    encountered during scanning.
+    """
+
+    file_path: str               # project-relative POSIX path
+    absolute_path: str           # absolute path on disk
+    language: Language
+    suffix: str                  # e.g. ".py", ".cpp"
+    size_bytes: int
+    raw_dependencies: list[RawDependency] = field(default_factory=list)
+    resolved_dependencies: list[ResolvedDependency] = field(default_factory=list)
+    symbols: list[ExtractedSymbol] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+    error: Optional[str] = None  # non-empty if scan failed catastrophically
+    is_script: bool = False       # True for Kotlin .kts script files
+
+    @property
+    def internal_dependencies(self) -> list[ResolvedDependency]:
+        return [d for d in self.resolved_dependencies if not d.is_external]
+
+    @property
+    def external_dependencies(self) -> list[ResolvedDependency]:
+        return [d for d in self.resolved_dependencies if d.is_external]
+
+    @property
+    def unresolved_dependencies(self) -> list[ResolvedDependency]:
+        return [d for d in self.resolved_dependencies if d.is_unresolved]
+
+
+# ---------------------------------------------------------------------------
+# Graph building
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class NodeMetadata:
+    """Metadata stored on each graph node."""
+
+    path: str
+    language: Language
+    suffix: str
+    size_bytes: int
+    symbol_count: int
+    unresolved_count: int
+    external_count: int
+
+
+@dataclass
+class EdgeMetadata:
+    """Metadata stored on each directed graph edge."""
+
+    raw_text: str
+    kind: DependencyKind
+    line_number: int
+    resolved_by: str
+
+
+@dataclass
+class GraphStats:
+    """Summary statistics about the built dependency graph."""
+
+    total_files: int
+    total_edges: int
+    python_files: int
+    java_files: int
+    kotlin_files: int
+    cpp_files: int
+    unknown_files: int
+    internal_edges: int
+    external_edges: int
+    unresolved_edges: int
+    total_symbols: int
+    language_breakdown: dict[str, int]
+    files_with_cycles: int
+
+
+@dataclass
+class GraphBuildResult:
+    """
+    Complete result of scanning a project and building its dependency graph.
+    """
+
+    project_root: str
+    scanned_at: datetime
+    scan_results: list[ScanResult]
+    total_files_found: int
+    files_skipped: int
+    files_with_errors: int
+    stats: GraphStats
+    warnings: list[str] = field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Impact analysis
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class ImpactChain:
+    """A single path from an affected file back to the mutated source."""
+
+    chain: list[str]    # list of project-relative POSIX paths, source->...->mutated
+    length: int        # number of hops
+
+
+@dataclass
+class PerFileImpact:
+    """Impact report for a single changed file."""
+
+    mutated_file: str
+    affected_files: list[str]
+    directly_affected: list[str]
+    impact_chains: list[ImpactChain]
+    total_affected: int
+    blast_radius_percent: float
+
+
+@dataclass
+class ImpactReport:
+    """
+    Full impact analysis report for one or more changed files.
+    """
+
+    mutated_files: list[str]
+    all_affected_files: list[str]
+    per_file_impact: list[PerFileImpact]
+    combined_affected_count: int
+    total_files_in_project: int
+    blast_radius_percent: float
+    risk_score: float
+    risk_level: RiskLevel
+
+
+# ---------------------------------------------------------------------------
+# Risk scoring
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class RiskComponent:
+    """One component of the risk score with its weight and contribution."""
+
+    name: str
+    weight: float
+    raw_value: float      # the un-normalized value
+    normalized_value: float  # 0.0 - 1.0
+    contribution: float     # weight * normalized_value
+    explanation: str
+
+
+@dataclass
+class RiskReport:
+    """
+    Detailed risk assessment for one or more files.
+    """
+
+    score: float         # 0 - 100
+    level: RiskLevel
+    components: list[RiskComponent]
+    involved_files: list[str]
+    explanation: str
+
+
+# ---------------------------------------------------------------------------
+# Cycle detection
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class CycleInfo:
+    """Details of a single dependency cycle."""
+
+    nodes: list[str]    # project-relative POSIX paths
+    length: int
+
+
+@dataclass
+class CycleReport:
+    """
+    Report of all dependency cycles detected in the project graph.
+    """
+
+    cycle_count: int
+    cycles: list[CycleInfo]
+    top_cycle_participants: list[tuple[str, int]]  # (path, count) sorted by count desc
+    severity: CycleSeverity
+    total_files_in_cycles: int
+
+
+# ---------------------------------------------------------------------------
+# Symbol-level call graph
+# ---------------------------------------------------------------------------
+
+
+class SymbolType(str, Enum):
+    """The kind of a symbol in a call graph."""
+
+    FUNCTION = "function"     # Python top-level function
+    CLASS = "class"          # Class or type
+    METHOD = "method"        # Java/Kotlin method, Python class method
+    PROPERTY = "property"    # Kotlin/JS property / Python attribute
+    CONSTRUCTOR = "constructor"  # Java/Kotlin constructor
+    INTERFACE = "interface"  # Java/Kotlin interface
+    ENUM = "enum"            # Java/Kotlin enum
+    ANNOTATION = "annotation"  # Java annotation
+    UNKNOWN = "unknown"
+
+
+@dataclass
+class Symbol:
+    """
+    A symbol (function, class, method, etc.) identified during scanning.
+    The primary node type in a call graph.
+    """
+
+    file_path: str            # project-relative POSIX path
+    name: str                 # simple name (e.g. "processData")
+    fully_qualified: str      # e.g. "com.example.Utils.processData" or "method:Utils.processData"
+    symbol_type: SymbolType
+    language: Language
+    line_number: int = 0
+    signature: Optional[str] = None  # e.g. "(str, int) -> bool"
+
+
+@dataclass
+class SymbolCall:
+    """
+    A directed call edge in the symbol-level call graph.
+    Represents that `callee` is called from within `caller`.
+    """
+
+    caller: Symbol
+    callee: Symbol
+    call_site: tuple[str, int]  # (file_path, line_number)
+    is_polymorphic: bool = False  # virtual dispatch (Java/C++ override)
+    is_external: bool = False     # cross-module / external library call
+
+
+@dataclass
+class CallGraphStats:
+    """Statistics about a built call graph."""
+
+    total_symbols: int
+    total_calls: int
+    external_calls: int
+    polymorphic_calls: int
+    max_call_depth: int        # deepest call chain found
+    python_symbols: int = 0
+    java_symbols: int = 0
+    kotlin_symbols: int = 0
+    cpp_symbols: int = 0
+
+
+@dataclass
+class CallGraphResult:
+    """
+    Complete result of building a symbol-level call graph from scan results.
+    """
+
+    project_root: str
+    scanned_at: datetime
+    nodes: list[Symbol]
+    edges: list[SymbolCall]
+    stats: CallGraphStats
+    warnings: list[str] = field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Audit report
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class TopFileEntry:
+    """A file with its dependency count, for reporting top-N lists."""
+
+    path: str
+    count: int
+    language: Language
+
+
+@dataclass
+class AuditReport:
+    """
+    Comprehensive audit report combining graph stats, cycle info, and risk.
+    This is the primary output of the `report` command.
+    """
+
+    project_path: str
+    generated_at: datetime
+    graph_stats: GraphStats
+    cycle_report: Optional[CycleReport]
+    top_depended_on: list[TopFileEntry]      # files depended on most (in-degree)
+    top_outgoing: list[TopFileEntry]         # files depending on most (out-degree)
+    unresolved_summary: list[ResolvedDependency]
+    external_summary: list[ResolvedDependency]
+    high_risk_files: list[str]
+    scan_duration_seconds: float
+
+
+# ---------------------------------------------------------------------------
+# Utility helpers
+# ---------------------------------------------------------------------------
+
+
+def normalize_path_to_posix(path: str, project_root: str) -> str:
+    """
+    Convert an absolute or mixed path to a project-relative POSIX path.
+
+    On Windows, this converts backslashes to forward slashes and strips
+    the project_root prefix. On Unix, just strips the prefix.
+    """
+    # Normalize to absolute path first
+    abs_path = os.path.abspath(path)
+    abs_root = os.path.abspath(project_root)
+
+    try:
+        rel = os.path.relpath(abs_path, abs_root)
+    except ValueError:
+        # On Windows, relpath fails if paths are on different drives
+        rel = path
+
+    # Convert to POSIX (forward slashes)
+    parts = PureWindowsPath(rel).parts if ":" in rel else PurePosixPath(rel).parts
+    return str(PurePosixPath(*parts))
+
+
+def get_language_from_suffix(suffix: str) -> Language:
+    """Map a file suffix to its Language enum value."""
+    mapping = {
+        ".py": Language.PYTHON,
+        ".java": Language.JAVA,
+        ".kt": Language.KOTLIN,
+        ".kts": Language.KOTLIN,
+        ".c": Language.CPP,
+        ".cc": Language.CPP,
+        ".cpp": Language.CPP,
+        ".cxx": Language.CPP,
+        ".h": Language.CPP,
+        ".hh": Language.CPP,
+        ".hpp": Language.CPP,
+        ".hxx": Language.CPP,
+    }
+    return mapping.get(suffix.lower(), Language.UNKNOWN)
