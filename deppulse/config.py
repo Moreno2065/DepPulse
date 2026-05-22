@@ -7,7 +7,7 @@ import json
 import os
 import warnings
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Optional
 
 
@@ -63,6 +63,24 @@ DEFAULT_RISK_THRESHOLDS: dict[str, int] = {
     "medium_threshold": 30,
 }
 
+DEFAULT_TEST_PATTERNS: frozenset[str] = frozenset({
+    "test_*.py",
+    "*_test.py",
+    "Test*.java",
+    "*Test.java",
+    "*Spec.kt",
+    "*Tests.kt",
+})
+
+DEFAULT_TEST_DIRS: frozenset[str] = frozenset({
+    "tests",
+    "test",
+    "spec",
+    "src/test",
+    "src/tests",
+    "__tests__",
+})
+
 
 # ---------------------------------------------------------------------------
 # Configuration dataclass
@@ -88,6 +106,8 @@ class DepPulseConfig:
     scanner_timeout_seconds: int = 30
     max_impact_chains: int = 50
     max_file_size_kb: int = 512  # skip files larger than this
+    test_patterns: frozenset[str] = field(default_factory=lambda: DEFAULT_TEST_PATTERNS.copy())
+    test_dirs: frozenset[str] = field(default_factory=lambda: DEFAULT_TEST_DIRS.copy())
 
     # Internally tracked
     _config_file: Optional[Path] = field(default=None, init=False, repr=False)
@@ -130,6 +150,14 @@ class DepPulseConfig:
         if isinstance(include_dirs, list):
             instance.include_dirs = frozenset(include_dirs)
 
+        test_patterns = data.get("test_patterns")
+        if isinstance(test_patterns, list):
+            instance.test_patterns = frozenset(test_patterns)
+
+        test_dirs = data.get("test_dirs")
+        if isinstance(test_dirs, list):
+            instance.test_dirs = frozenset(test_dirs)
+
         return instance
 
     def should_ignore_dir(self, name: str) -> bool:
@@ -145,5 +173,19 @@ class DepPulseConfig:
         """Return True if a file should be skipped during scanning."""
         for pattern in self.ignore_files:
             if fnmatch.fnmatch(name, pattern):
+                return True
+        return False
+
+    def is_test_file(self, path: str) -> bool:
+        """Return True if `path` matches any test pattern or is inside a test directory."""
+        name = os.path.basename(path)
+        # Strategy 1: filename pattern
+        for pattern in self.test_patterns:
+            if fnmatch.fnmatch(name, pattern):
+                return True
+        # Strategy 2: in a test directory
+        parts = PurePosixPath(path.replace("\\", "/")).parts
+        for part in parts:
+            if part in self.test_dirs:
                 return True
         return False

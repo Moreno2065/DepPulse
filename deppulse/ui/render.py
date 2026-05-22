@@ -2,24 +2,24 @@
 
 from __future__ import annotations
 
-from typing import Optional
-
 from rich.console import Console
 from rich.panel import Panel
-from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn
 from rich.style import Style
 from rich.table import Table
-from rich.tree import Tree
 
 from deppulse.models import (
     CycleReport,
     GraphBuildResult,
     ImpactReport,
     PerFileImpact,
+    PRReportResult,
     RiskLevel,
     RiskReport,
+    SnapshotDiff,
+    SnapshotMeta,
+    TestSelectionResult,
+    TrendAlert,
 )
-
 
 console = Console()
 
@@ -191,7 +191,6 @@ def _render_dependency_table(result: GraphBuildResult) -> None:
 
 def _render_top_files_table(result: GraphBuildResult) -> None:
     """Render tables of top depended-on and top outgoing files."""
-    from deppulse.core.orchestrator import DependencyOrchestrator
 
     # Build quick in/out degree tables
     in_deg: dict[str, int] = {}
@@ -293,7 +292,7 @@ def render_impact_report_simple(
     ]
 
     if impact.mutated_files:
-        body_parts.append(f"\n[red]Changed files:[/red]")
+        body_parts.append("\n[red]Changed files:[/red]")
         for f in impact.mutated_files:
             body_parts.append(f"  - {f}")
 
@@ -421,7 +420,7 @@ def render_risk_report(report: RiskReport) -> None:
 def render_diff_report(
     changed_files: list[str],
     unsupported: list[str],
-    impact: Optional[ImpactReport],
+    impact: ImpactReport | None,
     git_summary: dict[str, str],
 ) -> None:
     """Render the output of a diff command."""
@@ -526,3 +525,187 @@ def _patch_per_file_impact() -> None:
 
 
 _patch_per_file_impact()
+
+
+# ---------------------------------------------------------------------------
+# Test selection rendering (Scenario A)
+# ---------------------------------------------------------------------------
+
+def render_test_selection(result: TestSelectionResult) -> None:
+    """Render the output of a test selection result."""
+    if result.fallback_all:
+        ci_warning("Blast radius exceeds max-blast limit — all tests will be run.")
+
+    if _ci_mode:
+        ci_group("Test Selection")
+        print(f"  Changed files: {len(result.changed_files)}")
+        print(f"  Selected tests: {len(result.selected_tests)}")
+        print(f"  Blast radius: {result.blast_radius_percent:.1f}%")
+        if result.by_strategy.get("graph"):
+            print(f"  Graph strategy: {len(result.by_strategy['graph'])}")
+        if result.by_strategy.get("convention"):
+            print(f"  Convention strategy: {len(result.by_strategy['convention'])}")
+        ci_endgroup()
+        if result.selected_tests:
+            for t in result.selected_tests:
+                print(t)
+    else:
+        summary_text = (
+            f"[cyan]Changed files:[/cyan]    [white]{len(result.changed_files)}[/white]\n"
+            f"[cyan]Selected tests:[/cyan]  [white]{len(result.selected_tests)}[/white]\n"
+            f"[cyan]Blast radius:[/cyan]   [white]{result.blast_radius_percent:.1f}%[/white]\n"
+            f"[cyan]Fallback mode:[/cyan]   [yellow]{'YES — all tests' if result.fallback_all else 'No'}[/yellow]"
+        )
+        console.print(Panel(summary_text, title="[bold]Test Selection[/bold]", border_style="cyan"))
+
+        if result.by_strategy.get("graph"):
+            console.print()
+            table = Table(title="Graph Strategy", header_style="bold green")
+            table.add_column("Test File", style="white")
+            for t in result.by_strategy["graph"]:
+                table.add_row(t)
+            console.print(table)
+
+        if result.by_strategy.get("convention"):
+            console.print()
+            table = Table(title="Convention Strategy", header_style="bold yellow")
+            table.add_column("Test File", style="white")
+            for t in result.by_strategy["convention"]:
+                table.add_row(t)
+            console.print(table)
+
+        if result.selected_tests:
+            console.print()
+            console.print("[cyan]Selected test files:[/cyan]")
+            for t in result.selected_tests:
+                console.print(f"  - {t}")
+
+
+# ---------------------------------------------------------------------------
+# Snapshot rendering (Scenario B)
+# ---------------------------------------------------------------------------
+
+def render_snapshot_meta(meta: SnapshotMeta) -> None:
+    """Render a single snapshot metadata summary."""
+    summary = (
+        f"[cyan]Tag:[/cyan]        [white]{meta.tag}[/white]\n"
+        f"[cyan]Commit:[/cyan]      [white]{meta.commit_hash}[/white]\n"
+        f"[cyan]Files:[/cyan]       [white]{meta.total_files}[/white]\n"
+        f"[cyan]Edges:[/cyan]       [white]{meta.total_edges}[/white]\n"
+        f"[cyan]Cycles:[/cyan]      [white]{meta.cycle_count}[/white]\n"
+        f"[cyan]Saved at:[/cyan]    [white]{meta.saved_at.strftime('%Y-%m-%d %H:%M')}[/white]"
+    )
+    console.print(Panel(summary, title=f"[bold]Snapshot: {meta.tag}[/bold]", border_style="cyan"))
+
+
+def render_snapshot_list(snapshots: list[SnapshotMeta]) -> None:
+    """Render a list of all snapshots."""
+    if not snapshots:
+        console.print("[yellow]No snapshots saved yet. Run 'deppulse snapshot save' first.[/yellow]")
+        return
+
+    table = Table(title="[bold]Saved Snapshots[/bold]", header_style="bold cyan")
+    table.add_column("Tag", style="white")
+    table.add_column("Commit", style="cyan")
+    table.add_column("Files", justify="right", style="white")
+    table.add_column("Edges", justify="right", style="white")
+    table.add_column("Cycles", justify="right", style="yellow")
+    table.add_column("Saved At", style="dim")
+    for s in sorted(snapshots, key=lambda x: x.saved_at, reverse=True):
+        table.add_row(
+            s.tag,
+            s.commit_hash[:7],
+            str(s.total_files),
+            str(s.total_edges),
+            str(s.cycle_count),
+            s.saved_at.strftime("%Y-%m-%d %H:%M"),
+        )
+    console.print(table)
+
+
+def render_snapshot_diff(diff: SnapshotDiff) -> None:
+    """Render a snapshot comparison."""
+    delta_edges = diff.total_edges_delta
+    delta_files = diff.files_delta
+    edge_sign = "+" if delta_edges >= 0 else ""
+    file_sign = "+" if delta_files >= 0 else ""
+
+    edge_color = "green" if delta_edges <= 0 else "yellow" if delta_edges < 30 else "red"
+    file_color = "green" if delta_files <= 0 else "yellow"
+
+    summary = (
+        f"[cyan]Older:[/cyan]  [white]{diff.older.tag} ({diff.older.commit_hash[:7]})[/white]\n"
+        f"[cyan]Newer:[/cyan]  [white]{diff.newer.tag} ({diff.newer.commit_hash[:7]})[/white]\n"
+        f"[cyan]Edges:[/cyan]  [{edge_color}]{edge_sign}{delta_edges}[/{edge_color}]\n"
+        f"[cyan]Files:[/cyan]  [{file_color}]{file_sign}{delta_files}[/{file_color}]\n"
+        f"[cyan]New cycles:[/cyan] [white]{len(diff.new_cycles_added)}[/white]"
+    )
+    console.print(Panel(summary, title="[bold]Snapshot Diff[/bold]", border_style="cyan"))
+
+    if diff.alerts:
+        console.print()
+        for alert in diff.alerts:
+            console.print(f"  [yellow]! {alert}[/yellow]")
+
+
+def render_trend_alerts(alerts: list[TrendAlert]) -> None:
+    """Render trend monitoring alerts."""
+    if not alerts:
+        console.print("[green]No trend alerts. All metrics within thresholds.[/green]")
+        return
+
+    for alert in alerts:
+        severity = alert.severity.upper()
+        color = {"CRITICAL": "red", "WARNING": "yellow"}.get(severity, "cyan")
+        text = (
+            f"[{color}][bold]{severity}[/bold][/{color}]: {alert.metric} — "
+            f"threshold {alert.threshold}, "
+            f"value changed from {alert.older_value:.2f} to {alert.newer_value:.2f}"
+        )
+        console.print(text)
+
+
+# ---------------------------------------------------------------------------
+# PR report rendering (Scenario C)
+# ---------------------------------------------------------------------------
+
+def render_pr_report(result: PRReportResult) -> None:
+    """Render the output of a PR impact report."""
+    color = _risk_color(result.risk_level)
+
+    if _ci_mode:
+        ci_group("DepPulse PR Impact Report")
+        print(f"  Changed files: {len(result.changed_files)}")
+        print(f"  Affected files: {result.blast_radius}")
+        print(f"  Blast radius: {result.blast_radius_percent:.1f}%")
+        print(f"  Risk level: {result.risk_level.value} (score {result.risk_score:.1f})")
+        if result.suggested_tests:
+            print(f"  Suggested tests: {len(result.suggested_tests)}")
+            for t in result.suggested_tests[:10]:
+                print(f"    - {t}")
+        ci_endgroup()
+    else:
+        summary = (
+            f"[cyan]Changed files:[/cyan]    [white]{len(result.changed_files)}[/white]\n"
+            f"[cyan]Affected files:[/cyan]  [white]{result.blast_radius}[/white]\n"
+            f"[cyan]Blast radius:[/cyan]    [white]{result.blast_radius_percent:.1f}%[/white]\n"
+            f"[cyan]Risk level:[/cyan]      [{color}]{result.risk_level.value}[/{color}] (score {result.risk_score:.1f})"
+        )
+        console.print(Panel(summary, title="[bold]PR Impact Report[/bold]", border_style=color))
+
+        if result.top_affected:
+            console.print()
+            table = Table(title="Top Affected Files (by in-degree)", header_style="bold cyan")
+            table.add_column("File", style="white")
+            table.add_column("In-degree", justify="right", style="cyan")
+            table.add_column("Risk", style="white")
+            for entry in result.top_affected[:10]:
+                risk_c = _risk_color(entry.risk_level)
+                table.add_row(entry.path, str(entry.in_degree), f"[{risk_c}]{entry.risk_level.value}[/{risk_c}]")
+            console.print(table)
+
+        if result.suggested_tests:
+            console.print()
+            console.print("[cyan]Suggested tests:[/cyan]")
+            for t in result.suggested_tests:
+                console.print(f"  - {t}")

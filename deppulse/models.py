@@ -469,3 +469,114 @@ def get_language_from_suffix(suffix: str) -> Language:
         ".hxx": Language.CPP,
     }
     return mapping.get(suffix.lower(), Language.UNKNOWN)
+
+
+# ---------------------------------------------------------------------------
+# Test selection (Scenario A)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class TestSelectionResult:
+    """
+    Result of selecting which tests to run based on changed source files.
+    """
+
+    changed_files: list[str]
+    selected_tests: list[str]
+    by_strategy: dict[str, list[str]]
+    total_affected: int
+    blast_radius_percent: float
+    max_blast_reached: bool
+    fallback_all: bool
+
+
+# ---------------------------------------------------------------------------
+# Snapshot & trend monitoring (Scenario B)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class FileMetrics:
+    """Per-file metrics captured in a snapshot."""
+
+    path: str
+    in_degree: int
+    out_degree: int
+    centrality: float
+
+
+@dataclass
+class SnapshotMeta:
+    """
+    Metadata for a saved dependency-graph snapshot.
+    """
+
+    tag: str
+    commit_hash: str
+    commit_message: str
+    saved_at: datetime
+    project_root: str
+    total_files: int
+    total_edges: int
+    cycle_count: int
+    files_in_cycles: int
+    file_metrics: dict[str, FileMetrics]
+
+
+@dataclass
+class SnapshotDiff:
+    """
+    Delta between two snapshots for trend analysis.
+    """
+
+    older: SnapshotMeta
+    newer: SnapshotMeta
+    new_cycles_added: list[CycleInfo]
+    total_edges_delta: int
+    files_delta: int
+    alerts: list[str]
+
+
+@dataclass
+class TrendAlert:
+    """
+    A single alert raised during snapshot comparison.
+    """
+
+    metric: str
+    threshold: str
+    older_value: float
+    newer_value: float
+    severity: str
+
+
+# ---------------------------------------------------------------------------
+# PR impact report (Scenario C)
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class FileRiskEntry:
+    """A file with its in-degree and risk level for PR reporting."""
+
+    path: str
+    in_degree: int
+    risk_level: RiskLevel
+
+
+@dataclass
+class PRReportResult:
+    """
+    Structured result of a PR impact report.
+    """
+
+    changed_files: list[str]
+    affected_files: list[str]
+    blast_radius: float
+    blast_radius_percent: float
+    risk_score: float
+    risk_level: RiskLevel
+    suggested_tests: list[str]
+    top_affected: list[FileRiskEntry]
+    markdown_body: str

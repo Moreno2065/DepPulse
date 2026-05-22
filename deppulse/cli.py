@@ -213,6 +213,95 @@ def _build_parser() -> argparse.ArgumentParser:
         "--ci", action="store_true", help="CI mode: reduce output, use GitHub Actions format"
     )
 
+    # ---- tests ----
+    tests_parser = sub.add_parser(
+        "tests",
+        help="Select affected tests based on changed files",
+    )
+    tests_parser.add_argument("path", type=Path, default=".", help="Project root path")
+    tests_parser.add_argument(
+        "--since", type=str, default=None,
+        help="Compare against a git ref (e.g. main, HEAD~5)",
+    )
+    tests_parser.add_argument(
+        "--files", type=str, nargs="+",
+        help="Explicitly specify changed file paths",
+    )
+    tests_parser.add_argument(
+        "--format",
+        choices=["list", "args", "json"],
+        default="list",
+        help="Output format (default: list)",
+    )
+    tests_parser.add_argument(
+        "--max-blast", type=int, default=50,
+        help="Max number of selected tests before fallback to all (default: 50)",
+    )
+    tests_parser.add_argument(
+        "--ci", action="store_true", help="CI mode: reduce output, use GitHub Actions format"
+    )
+
+    # ---- snapshot ----
+    snapshot_parser = sub.add_parser(
+        "snapshot",
+        help="Manage dependency graph snapshots for trend monitoring",
+    )
+    snapshot_sub = snapshot_parser.add_subparsers(dest="snapshot_cmd", required=True)
+
+    save_parser = snapshot_sub.add_parser("save", help="Save a new snapshot")
+    save_parser.add_argument("path", type=Path, default=".", help="Project root path")
+    save_parser.add_argument(
+        "--tag", type=str, default=None,
+        help="Optional tag for this snapshot (e.g. v0.2.0)",
+    )
+
+    diff_parser = snapshot_sub.add_parser("diff", help="Compare two snapshots")
+    diff_parser.add_argument("path", type=Path, default=".", help="Project root path")
+    diff_parser.add_argument("--from", dest="from_tag", type=str, required=True, help="Older snapshot tag")
+    diff_parser.add_argument("--to", dest="to_tag", type=str, required=True, help="Newer snapshot tag")
+    diff_parser.add_argument("--json", action="store_true", help="Output as JSON")
+
+    list_parser = snapshot_sub.add_parser("list", help="List all saved snapshots")
+    list_parser.add_argument("path", type=Path, default=".", help="Project root path")
+
+    check_parser = snapshot_sub.add_parser("check", help="Check trends since a snapshot (CI mode)")
+    check_parser.add_argument("path", type=Path, default=".", help="Project root path")
+    check_parser.add_argument(
+        "--since-tag", dest="since_tag", type=str, required=True,
+        help="Compare against this snapshot tag",
+    )
+    check_parser.add_argument(
+        "--ci", action="store_true", help="CI mode: reduce output, use GitHub Actions format"
+    )
+
+    # ---- pr-report ----
+    pr_parser = sub.add_parser(
+        "pr-report",
+        help="Generate a PR impact report for code review",
+    )
+    pr_parser.add_argument("path", type=Path, default=".", help="Project root path")
+    pr_parser.add_argument(
+        "--base", type=str, default="main",
+        help="Base branch to compare against (default: main)",
+    )
+    pr_parser.add_argument(
+        "--format",
+        choices=["github-comment", "markdown", "json"],
+        default="github-comment",
+        help="Output format (default: github-comment)",
+    )
+    pr_parser.add_argument(
+        "--fail-on-high-risk", action="store_true",
+        help="Exit with code 1 if risk level is HIGH",
+    )
+    pr_parser.add_argument(
+        "--output", type=Path, default=None,
+        help="Write output to file instead of stdout",
+    )
+    pr_parser.add_argument(
+        "--ci", action="store_true", help="CI mode: reduce output, use GitHub Actions format"
+    )
+
     # ---- Shared incremental flags on scan ----
     # Add --incremental and --since to scan parser
     scan_parser.add_argument(
@@ -780,6 +869,183 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_tests(args: argparse.Namespace) -> int:
+    """Handle: deppulse tests <path>"""
+    project_path = args.path.resolve()
+
+    if args.ci:
+        ui.set_ci_mode(True)
+
+    config = DepPulseConfig.from_path(project_path)
+
+    # Get changed files
+    changed_files: list[str]
+    if args.files:
+        changed_files = [str(f).replace("\\", "/") for f in args.files]
+    elif args.since:
+        if not is_git_repo(project_path):
+            ui.console.print("[yellow]Not a git repository. Use --files to specify files directly.[/yellow]")
+            return 1
+        from deppulse.git import get_changed_files
+        changed_files = get_changed_files(project_path, ref=args.since)
+    else:
+        if not is_git_repo(project_path):
+            ui.console.print("[yellow]Not a git repository. Use --files to specify files directly.[/yellow]")
+            return 1
+        from deppulse.git import get_changed_files
+        changed_files = get_changed_files(project_path)
+
+    if not changed_files:
+        ui.console.print("[green]No changed files detected.[/green]")
+        return 0
+
+    # Run the scan
+    result, G, _ = _run_scan(project_path, config, use_cache=not args.no_cache)
+
+    # Select tests
+    from deppulse.core.test_selector import TestSelector
+    selector = TestSelector(G, config=config)
+    test_result = selector.select_tests(changed_files, max_blast=args.max_blast)
+
+    # Output based on format
+    if args.format == "json":
+        import json
+        data = {
+            "changed_files": test_result.changed_files,
+            "selected_tests": test_result.selected_tests,
+            "by_strategy": test_result.by_strategy,
+            "total_affected": test_result.total_affected,
+            "blast_radius_percent": test_result.blast_radius_percent,
+            "max_blast_reached": test_result.max_blast_reached,
+            "fallback_all": test_result.fallback_all,
+        }
+        ui.render_json_output(data)
+    elif args.format == "args":
+        print(" ".join(test_result.selected_tests))
+    else:  # list
+        ui.render_test_selection(test_result)
+
+    return 0
+
+
+def _cmd_snapshot(args: argparse.Namespace) -> int:
+    """Handle: deppulse snapshot <subcommand>"""
+    from deppulse.core.snapshot import SnapshotManager
+
+    project_path = args.path.resolve()
+    manager = SnapshotManager(project_path)
+
+    if args.snapshot_cmd == "save":
+        config = DepPulseConfig.from_path(project_path)
+        result, G, _ = _run_scan(project_path, config, use_cache=not args.no_cache)
+        meta = manager.save(result, tag=args.tag)
+        ui.render_snapshot_meta(meta)
+        ui.console.print(f"[green]Snapshot saved: {meta.tag}[/green]")
+        return 0
+
+    elif args.snapshot_cmd == "list":
+        snapshots = manager.list_snapshots()
+        ui.render_snapshot_list(snapshots)
+        return 0
+
+    elif args.snapshot_cmd == "diff":
+        diff = manager.diff(args.from_tag, args.to_tag)
+        if args.json:
+            import json
+            data = {
+                "older": {"tag": diff.older.tag, "commit_hash": diff.older.commit_hash,
+                          "total_files": diff.older.total_files, "total_edges": diff.older.total_edges},
+                "newer": {"tag": diff.newer.tag, "commit_hash": diff.newer.commit_hash,
+                          "total_files": diff.newer.total_files, "total_edges": diff.newer.total_edges},
+                "edges_delta": diff.total_edges_delta,
+                "files_delta": diff.files_delta,
+                "new_cycles": [{"nodes": c.nodes, "length": c.length} for c in diff.new_cycles_added],
+                "alerts": diff.alerts,
+            }
+            ui.render_json_output(data)
+        else:
+            ui.render_snapshot_diff(diff)
+        return 0
+
+    elif args.snapshot_cmd == "check":
+        if args.ci:
+            ui.set_ci_mode(True)
+        config = DepPulseConfig.from_path(project_path)
+        result, G, _ = _run_scan(project_path, config, use_cache=not args.no_cache)
+        diff, alerts = manager.check_trends(args.since_tag)
+        ui.render_snapshot_diff(diff)
+        ui.render_trend_alerts(alerts)
+        if alerts:
+            for alert in alerts:
+                if alert.severity.upper() == "CRITICAL":
+                    return 1
+        return 0
+
+    ui.console.print(f"[red]Unknown snapshot subcommand: {args.snapshot_cmd}[/red]")
+    return 1
+
+
+def _cmd_pr_report(args: argparse.Namespace) -> int:
+    """Handle: deppulse pr-report <path>"""
+    project_path = args.path.resolve()
+
+    if args.ci:
+        ui.set_ci_mode(True)
+
+    if not is_git_repo(project_path):
+        ui.console.print("[yellow]Not a git repository. Cannot determine changed files.[/yellow]")
+        return 1
+
+    config = DepPulseConfig.from_path(project_path)
+
+    # Get changed files vs base ref
+    from deppulse.git import get_changed_files
+    changed_files = get_changed_files(project_path, ref=args.base)
+
+    if not changed_files:
+        ui.console.print("[green]No changed files detected against base branch.[/green]")
+        return 0
+
+    # Run the scan
+    result, G, _ = _run_scan(project_path, config, use_cache=not args.no_cache)
+
+    # Generate PR report
+    from deppulse.core.pr_reporter import PRReporter
+    reporter = PRReporter(G, config=config)
+    report = reporter.generate(changed_files, base_ref=args.base)
+
+    # Output based on format
+    if args.format == "json":
+        data = {
+            "changed_files": report.changed_files,
+            "affected_files": report.affected_files,
+            "blast_radius": report.blast_radius,
+            "blast_radius_percent": report.blast_radius_percent,
+            "risk_score": report.risk_score,
+            "risk_level": report.risk_level.value,
+            "suggested_tests": report.suggested_tests,
+            "top_affected": [
+                {"path": e.path, "in_degree": e.in_degree, "risk_level": e.risk_level.value}
+                for e in report.top_affected
+            ],
+        }
+        ui.render_json_output(data)
+    else:
+        markdown = reporter.generate_markdown(report, format=args.format)
+        if args.output:
+            args.output.write_text(markdown, encoding="utf-8")
+            ui.console.print(f"[green]PR report written to {args.output}[/green]")
+        else:
+            print(markdown)
+
+    # Fail on high risk
+    if args.fail_on_high_risk and report.risk_level.value == "HIGH":
+        ui.console.print("[red]High risk change detected. Exiting with error.[/red]")
+        return 1
+
+    return 0
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
@@ -802,6 +1068,9 @@ def main(argv: Optional[list[str]] = None) -> int:
         "doctor": _cmd_doctor,
         "callgraph": _cmd_callgraph,
         "viz": _cmd_viz,
+        "tests": _cmd_tests,
+        "snapshot": _cmd_snapshot,
+        "pr-report": _cmd_pr_report,
     }
 
     handler = handlers.get(args.command)
