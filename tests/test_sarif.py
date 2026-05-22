@@ -252,7 +252,9 @@ class TestGraphToSarif:
             files_with_errors=0,
             stats=GraphStats(
                 total_files=0, total_edges=0,
-                python_files=0, java_files=0, kotlin_files=0, cpp_files=0, unknown_files=0,
+                python_files=0, java_files=0, kotlin_files=0, cpp_files=0,
+                javascript_files=0, typescript_files=0,
+                unknown_files=0,
                 internal_edges=0, external_edges=0, unresolved_edges=0,
                 total_symbols=0, language_breakdown={}, files_with_cycles=0,
             ),

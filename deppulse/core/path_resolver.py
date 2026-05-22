@@ -404,7 +404,7 @@ class PathResolver:
 
     @staticmethod
     def _is_java_stdlib(module: str) -> bool:
-        return module.startswith("java.") or module.startswith("javax.")
+        return module.startswith("java.") or module.startswith("javax.") or module.startswith("kotlin.")
 
     @staticmethod
     def _is_java_external(module: str) -> bool:

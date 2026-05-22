@@ -16,14 +16,20 @@ def is_git_repo(path: Path) -> bool:
     """
     Return True if `path` is inside a git repository.
 
-    Walks up from path until it finds a .git directory or reaches filesystem root.
+    Uses `git rev-parse --is-inside-work-tree` for accurate detection,
+    which distinguishes between a bare repo, worktree, or nested subdirectories.
     """
-    current: Optional[Path] = path.resolve()
-    while current is not None and current != current.parent:
-        if (current / ".git").is_dir():
-            return True
-        current = current.parent
-    return False
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--is-inside-work-tree"],
+            cwd=str(path.resolve()),
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        return result.returncode == 0 and result.stdout.strip().lower() == "true"
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return False
 
 
 def _run_git(

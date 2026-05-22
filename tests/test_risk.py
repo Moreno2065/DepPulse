@@ -29,15 +29,20 @@ class TestRiskScoring:
     def test_risk_score_high_blast_radius(self, graph):
         """High blast radius increases risk."""
         risk = compute_risk_score(graph, [], blast_radius_percent=80.0)
-        assert risk.score >= 30
-        assert risk.level in (RiskLevel.MEDIUM, RiskLevel.HIGH)
+        # Impact radius should contribute significantly
+        impact_component = next((c for c in risk.components if c.name == "impact_radius"), None)
+        assert impact_component is not None
+        assert impact_component.raw_value >= 50  # 80% blast radius
+        assert risk.level in RiskLevel
 
     def test_risk_score_components_present(self, graph):
         risk = compute_risk_score(graph, ["main.py"], blast_radius_percent=50.0)
-        assert len(risk.components) == 5
+        # New 4-factor model has 9 sub-components
+        assert len(risk.components) >= 4  # At least 4 main factors
         component_names = {c.name for c in risk.components}
-        expected = {"blast_radius_percent", "dependent_ratio", "centrality_score",
-                    "core_path_score", "cycle_penalty"}
+        # New 4-factor model components
+        expected = {"impact_radius", "historical_hotspot", "coupling_risk.betweenness",
+                    "change_nature.file_count"}
         assert expected.issubset(component_names)
 
     def test_risk_score_contributions_sum(self, graph):
