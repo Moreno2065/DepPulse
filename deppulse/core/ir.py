@@ -18,11 +18,14 @@ snapshot) continue to receive GraphBuildResult without changes.
 
 from __future__ import annotations
 
+import networkx as nx
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
+
+if TYPE_CHECKING:
+    from deppulse.models import DependencyKind, ScanResult
 
 
 # ---------------------------------------------------------------------------
@@ -381,3 +384,146 @@ class UnifiedIR:
                     G.add_edge(edge.from_file, edge.to_file)
 
         return G
+
+
+# ---------------------------------------------------------------------------
+# ScanResult → UnifiedIR builder
+# ---------------------------------------------------------------------------
+
+
+def build_unified_ir(
+    scan_results: list["ScanResult"],
+    project_root: str,
+) -> UnifiedIR:
+    """
+    Convert a list of per-file ScanResults into a UnifiedIR.
+
+    This is the canonical bridge between scanner output and the unified IR.
+    Called automatically by ``DependencyOrchestrator.scan()`` after Phase 2.
+
+    Parameters
+    ----------
+    scan_results : list[ScanResult]
+        Raw scan results from all scanners.
+    project_root : str
+        Absolute path to the project root (for reference only).
+
+    Returns
+    -------
+    UnifiedIR
+        Populated IR with file_nodes, sym_defs, import_edges, and call_edges.
+    """
+    # Circular deppulse → ir → models is broken by importing at runtime below.
+    # (ScanResult and DependencyKind are only used in type annotations via
+    #  forward-reference strings, so they are not needed at runtime here.)
+
+    for sr in scan_results:
+        fn = FileNode(
+            path=sr.file_path,
+            language=sr.language.value,
+            suffix=sr.suffix,
+            size_bytes=sr.size_bytes,
+            warnings=list(sr.warnings) if sr.warnings else [],
+            error=sr.error,
+        )
+
+        # Extract symbol definitions from ScanResult
+        for sym in sr.symbols:
+            # sym: ExtractedSymbol with fields: symbol_type, name, fully_qualified
+            sym_type_map = {
+                "function": SymType.FUNCTION,
+                "class": SymType.CLASS,
+                "method": SymType.METHOD,
+                "property": SymType.PROPERTY,
+                "constructor": SymType.CONSTRUCTOR,
+                "interface": SymType.INTERFACE,
+                "enum": SymType.ENUM,
+                "annotation": SymType.ANNOTATION,
+                "type_alias": SymType.TYPE_ALIAS,
+            }
+            st = sym_type_map.get(sym.symbol_type, SymType.UNKNOWN)
+
+            # Derive owner from fqn if it contains a dot
+            owner: Optional[str] = None
+            fqn_str = sym.fully_qualified or sym.name
+            if "." in fqn_str and not fqn_str.startswith("."):
+                owner = fqn_str.rsplit(".", 1)[0]
+
+            # Line range: default to (1,1) when symbol location isn't tracked
+            lr = LineRange(start=1, end=1)
+
+            sd = SymDef(
+                name=sym.name,
+                fqn=fqn_str,
+                sym_type=st,
+                file_path=sr.file_path,
+                line_range=lr,
+                visibility=Visibility.UNKNOWN,
+                language=sr.language.value,
+                owner=owner,
+            )
+            ir.sym_defs.append(sd)
+            fn.symbols.append(
+                RawSymbol(
+                    name=sym.name,
+                    fqn=fqn_str,
+                    sym_type=st,
+                    file_path=sr.file_path,
+                    line_range=lr,
+                    visibility=Visibility.UNKNOWN,
+                )
+            )
+
+        ir.file_nodes.append(fn)
+
+        # Convert resolved dependencies → ImportEdge
+        for dep in sr.resolved_dependencies:
+            if dep.is_unresolved:
+                edge = ImportEdge(
+                    from_file=sr.file_path,
+                    to_file=None,
+                    specifier=dep.raw.raw_text,
+                    import_kind=_depkind_to_importkind(dep.raw.kind),
+                    line=dep.raw.line_number,
+                    is_external=True,
+                    is_unresolved=True,
+                    resolution_note=dep.resolution_note or "unresolved",
+                )
+            elif dep.is_external:
+                edge = ImportEdge(
+                    from_file=sr.file_path,
+                    to_file=None,
+                    specifier=dep.raw.raw_text,
+                    import_kind=_depkind_to_importkind(dep.raw.kind),
+                    line=dep.raw.line_number,
+                    is_external=True,
+                    is_stdlib=dep.is_stdlib,
+                    resolution_note=dep.resolution_note or "",
+                )
+            else:
+                edge = ImportEdge(
+                    from_file=sr.file_path,
+                    to_file=dep.normalized_path,
+                    specifier=dep.raw.raw_text,
+                    import_kind=_depkind_to_importkind(dep.raw.kind),
+                    line=dep.raw.line_number,
+                    is_external=False,
+                )
+            ir.import_edges.append(edge)
+
+    ir.build_indices()
+    return ir
+
+
+def _depkind_to_importkind(kind: "DependencyKind") -> ImportKind:
+    """Map DependencyKind (models.py) to ImportKind (ir.py)."""
+    from deppulse.models import DependencyKind
+
+    mapping = {
+        DependencyKind.JAVA_IMPORT: ImportKind.JAVA_IMPORT,
+        DependencyKind.KOTLIN_IMPORT: ImportKind.KOTLIN_IMPORT,
+        DependencyKind.JAVASCRIPT_IMPORT: ImportKind.ESM_IMPORT,
+        DependencyKind.INCLUDE_LOCAL: ImportKind.INCLUDE_LOCAL,
+        DependencyKind.INCLUDE_SYSTEM: ImportKind.INCLUDE_SYSTEM,
+    }
+    return mapping.get(kind, ImportKind.UNKNOWN)

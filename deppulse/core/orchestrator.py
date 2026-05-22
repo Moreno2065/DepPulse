@@ -13,13 +13,13 @@ import networkx as nx
 
 from deppulse.cache import ScanCache
 from deppulse.config import DepPulseConfig
+from deppulse.core.ir import UnifiedIR, build_unified_ir
 from deppulse.models import (
     EdgeMetadata,
     GraphBuildResult,
     GraphStats,
     Language,
     NodeMetadata,
-    ResolvedDependency,
     ScanResult,
 )
 from deppulse.scanners.base import BaseScanner
@@ -132,6 +132,9 @@ class DependencyOrchestrator:
             if result.error:
                 errors += 1
 
+        # Phase 2.5: build UnifiedIR from scan results
+        unified_ir: UnifiedIR = build_unified_ir(scan_results, str(root))
+
         # Phase 3: build networkx graph
         graph, files_with_cycles = self._build_graph(scan_results, root)
 
@@ -153,6 +156,7 @@ class DependencyOrchestrator:
             files_with_errors=errors,
             stats=stats,
             warnings=self._warnings,
+            unified_ir=unified_ir,
         )
 
     # ------------------------------------------------------------------

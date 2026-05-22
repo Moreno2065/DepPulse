@@ -218,6 +218,17 @@ class GraphBuildResult:
     files_with_errors: int
     stats: GraphStats
     warnings: list[str] = field(default_factory=list)
+    # Unified IR built from scan results; None if scan() did not build it.
+    # Available after DependencyOrchestrator.scan() completes.
+    unified_ir: Optional["UnifiedIR"] = None
+
+
+# Forward reference for the UnifiedIR type annotation above.
+# The actual import lives in core/ir.py to avoid circular deppulse → ir → models.
+class UnifiedIR:
+    """Placeholder; resolved lazily at runtime via get_type()."""
+
+    pass
 
 
 # ---------------------------------------------------------------------------
