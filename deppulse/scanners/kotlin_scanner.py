@@ -131,7 +131,7 @@ def _extract_symbols_regex(content: str) -> list[ExtractedSymbol]:
     class_stack: list[str] = []
 
     RE_CLASS = re.compile(r"^\s*(?:class|interface|object|annotation\s+class)\s+(\w+)")
-    RE_FUNC = re.compile(r"\bfun\s+(\w+)\s*(?:[<{(]|$)")
+    RE_FUNC = re.compile(r"^\s*(?!(?:val|var)\b)\bfun\s+(\w+)\s*(?:[<{(]|$)")
     RE_PROP = re.compile(r"^\s*(?:val|var)\s+(\w+)")
 
     for line in content.split("\n"):
@@ -246,13 +246,16 @@ class KotlinTreeSitterParser(TreeSitterParser):
     def _fq_with_type(self, sym_type: SymType, name: str, parent: Optional[str] = None) -> str:
         """Build a fully-qualified name with type prefix.
 
-        Uses `class:` prefix for all types including annotations/objects/interfaces
-        to match the legacy regex implementation's behavior and test expectations.
+        parent_fqn may already have a type prefix (from tree-sitter results).
+        We strip any existing prefix before building the new fqn.
         """
-        # Map all type kinds to 'class:' for consistency with legacy tests
+        prefix = sym_type.value
         if parent:
-            return f"method:{parent}.{name}"
-        return f"class:{name}"
+            # Strip any existing type prefix from parent
+            import re
+            clean_parent = re.sub(r"^(function|class|method|property|constructor|interface|enum|annotation|type_alias):", "", parent)
+            return f"{prefix}:{clean_parent}.{name}"
+        return f"{prefix}:{name}"
 
     # ------------------------------------------------------------------------
     # Package
@@ -288,7 +291,7 @@ class KotlinTreeSitterParser(TreeSitterParser):
         source = root.text  # bytes needed for _node_* helpers
 
         for child in root.children:
-            if child.type == "import_header":
+            if child.type == "import":
                 raw_text = self._node_text(child, source).strip()
                 # Remove 'import ' prefix to get the specifier
                 specifier = raw_text[7:].strip()  # len("import ") == 7
