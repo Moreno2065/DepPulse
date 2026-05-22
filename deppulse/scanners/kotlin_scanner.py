@@ -52,6 +52,8 @@ def _resolve_import_to_path(module: str, file_index: dict[str, Path]) -> Optiona
 
     e.g. com.example.utils -> com/example/utils.kt or com/example/utils/__init__.kt
     """
+    if not file_index:
+        return None
     path_with_slash = module.replace(".", "/")
     candidates = [
         path_with_slash + ".kt",
