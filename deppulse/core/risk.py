@@ -61,8 +61,8 @@ def compute_risk_score(
     ))
 
     # Dependent ratio component (weight: 20 out of 100)
-    in_degrees = [graph.in_degree(f) for f in involved_files]
-    out_degrees = [graph.out_degree(f) for f in involved_files]
+    in_degrees = [int(graph.in_degree(f)) for f in involved_files if f in graph]
+    out_degrees = [int(graph.out_degree(f)) for f in involved_files if f in graph]
     avg_in = sum(in_degrees) / max(len(in_degrees), 1)
     avg_out = sum(out_degrees) / max(len(out_degrees), 1)
     total_deps = avg_in + avg_out

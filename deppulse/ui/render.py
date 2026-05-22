@@ -395,7 +395,6 @@ def render_risk_report(report: RiskReport) -> None:
     table.add_column("Explanation", style="dim")
 
     for comp in report.components:
-        contrib_pct = f"{comp.contribution * 100:.1f} ({comp.weight:.0%})"
         table.add_row(
             comp.name,
             f"{comp.weight:.0%}",

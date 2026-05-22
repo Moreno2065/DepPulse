@@ -136,7 +136,7 @@ class JavaScanner(BaseScanner):
                         raw_deps.append(raw_dep)
 
                         resolved = self._resolve_import(
-                            module, is_static, is_wildcard, file_index, raw_dep
+                            module, is_static, is_wildcard, raw_dep, file_index
                         )
                         resolved_deps.append(resolved)
 

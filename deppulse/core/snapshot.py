@@ -152,9 +152,9 @@ class SnapshotManager:
 
         # Compute betweenness centrality
         centrality_scores: dict[str, float] = {}
-        if G.number_of_nodes() > 1:
+        if graph.number_of_nodes() > 1:
             try:
-                betweenness = nx.betweenness_centrality(G, normalized=True)
+                betweenness = nx.betweenness_centrality(graph, normalized=True)
                 centrality_scores = betweenness
             except Exception:
                 centrality_scores = {}
@@ -163,17 +163,16 @@ class SnapshotManager:
         cycle_report: CycleReport | None = None
         try:
             from deppulse.core.cycles import find_cycles
-            cycle_report = find_cycles(G)
+            cycle_report = find_cycles(graph)
         except Exception:
             cycle_report = None
 
         # Build per-file metrics
-        for node in G.nodes():
-            scan_result = scan_by_path.get(node)
+        for node in graph.nodes():
             file_metrics[node] = FileMetrics(
                 path=node,
-                in_degree=G.in_degree(node),
-                out_degree=G.out_degree(node),
+                in_degree=graph.in_degree(node),
+                out_degree=graph.out_degree(node),
                 centrality=centrality_scores.get(node, 0.0),
             )
 
@@ -300,9 +299,6 @@ class SnapshotManager:
                 out_degree=m_dict["out_degree"],
                 centrality=m_dict["centrality"],
             )
-
-        cycles_json = data.get("cycles", [])
-        cycles = [CycleInfo(nodes=c["nodes"], length=c["length"]) for c in cycles_json]
 
         saved_at = datetime.fromisoformat(data["saved_at"])
 
@@ -466,17 +462,16 @@ class SnapshotManager:
         # Per-file in-degree changes > 100%
         for path, newer_metric in diff.newer.file_metrics.items():
             older_metric = diff.older.file_metrics.get(path)
-            if older_metric:
-                if older_metric.in_degree > 0:
-                    change_pct = ((newer_metric.in_degree - older_metric.in_degree) / older_metric.in_degree) * 100
-                    if change_pct > 100:
-                        alerts.append(TrendAlert(
-                            metric=f"in_degree_change:{path}",
-                            threshold="100%",
-                            older_value=float(older_metric.in_degree),
-                            newer_value=float(newer_metric.in_degree),
-                            severity="WARNING",
-                        ))
+            if older_metric and older_metric.in_degree > 0:
+                change_pct = ((newer_metric.in_degree - older_metric.in_degree) / older_metric.in_degree) * 100
+                if change_pct > 100:
+                    alerts.append(TrendAlert(
+                        metric=f"in_degree_change:{path}",
+                        threshold="100%",
+                        older_value=float(older_metric.in_degree),
+                        newer_value=float(newer_metric.in_degree),
+                        severity="WARNING",
+                    ))
 
         return alerts
 

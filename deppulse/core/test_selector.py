@@ -187,27 +187,18 @@ def convention_test_path(source_path: str) -> str | None:
     filename = parts[-1]
 
     # Get the module name (strip extension)
-    if "." in filename:
-        base_name = filename.rsplit(".", 1)[0]
-    else:
-        base_name = filename
+    base_name = filename.rsplit(".", 1)[0] if "." in filename else filename
 
     # Determine the test directory
     test_dir = "tests"
 
     # Strip src/ prefix if present (e.g. src/foo.py -> tests/)
-    if parts[0] == "src" and len(parts) > 1:
-        sub_parts = parts[1:]
-    else:
-        sub_parts = parts[:-1]
+    sub_parts = parts[1:] if parts[0] == "src" and len(parts) > 1 else parts[:-1]
 
     # Build test filename: test_{basename}.py
     test_filename = f"test_{base_name}.py"
 
-    if sub_parts:
-        test_rel = "/".join(sub_parts + [test_filename])
-    else:
-        test_rel = f"{test_dir}/{test_filename}"
+    test_rel = "/".join(sub_parts + [test_filename]) if sub_parts else f"{test_dir}/{test_filename}"
 
     return test_rel
 
