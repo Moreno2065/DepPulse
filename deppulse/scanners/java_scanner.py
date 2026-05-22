@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-import javalang
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
+import javalang
+
+from deppulse.core.path_resolver import PathResolver
 from deppulse.models import (
     DependencyKind,
     ExtractedSymbol,
@@ -15,6 +17,9 @@ from deppulse.models import (
     ScanResult,
 )
 from deppulse.scanners.base import BaseScanner
+
+if TYPE_CHECKING:
+    from javalang.tree import CompilationUnit
 
 
 _RE_STATIC_IMPORT_PREFIX = "import static "
@@ -50,6 +55,29 @@ def _resolve_import_to_path(module: str, file_index: dict[str, Path]) -> Optiona
     return None
 
 
+class JavaJavalangParser:
+    """
+    Parser wrapper for Java source files using the javalang library.
+
+    Provides a consistent interface with other parser implementations
+    (e.g., tree-sitter-based parsers) while wrapping javalang's parse tree.
+    """
+
+    @property
+    def language(self) -> type:
+        """Return the javalang module as the language marker."""
+        return javalang
+
+    def parse(self, source: str) -> "CompilationUnit":
+        """Parse Java source code string and return a javalang CompilationUnit."""
+        return javalang.parse.parse(source)
+
+    def parse_file(self, file_path: Path) -> "CompilationUnit":
+        """Read and parse a Java source file, returning a javalang CompilationUnit."""
+        content = file_path.read_text(encoding="utf-8")
+        return self.parse(content)
+
+
 class JavaScanner(BaseScanner):
     """
     Scanner for Java source files using the javalang library.
@@ -63,6 +91,35 @@ class JavaScanner(BaseScanner):
     name = "java"
 
     JAVA_SUFFIXES = frozenset({".java"})
+
+    def __init__(
+        self,
+        project_root: Optional[Path] = None,
+        file_index: Optional[dict[str, Path]] = None,
+    ) -> None:
+        self._parser: Optional[JavaJavalangParser] = None
+        self._project_root: Optional[Path] = project_root
+        self._file_index: Optional[dict[str, Path]] = file_index
+        self._resolver: Optional[PathResolver] = None
+
+    @property
+    def parser(self) -> JavaJavalangParser:
+        """Return a JavaParser instance (lazily initialized)."""
+        if self._parser is None:
+            self._parser = JavaJavalangParser()
+        return self._parser
+
+    @property
+    def resolver(self) -> PathResolver:
+        """Return a PathResolver instance (lazily initialized)."""
+        if self._resolver is None:
+            root = self._project_root or Path.cwd()
+            self._resolver = PathResolver(project_root=root, file_index=self._file_index)
+        return self._resolver
+
+    def parse_file(self, file_path: Path) -> "CompilationUnit":
+        """Parse a Java file and return the javalang CompilationUnit."""
+        return self.parser.parse_file(file_path)
 
     def can_scan(self, path: Path) -> bool:
         return path.suffix.lower() in self.JAVA_SUFFIXES

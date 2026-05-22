@@ -21,6 +21,7 @@ class DependencyKind(str, Enum):
     IMPORT = "import"          # Python: import x / from x import y
     JAVA_IMPORT = "java_import"  # Java: import com.example.Utils;
     KOTLIN_IMPORT = "kotlin_import"  # Kotlin: import com.example.Utils
+    JAVASCRIPT_IMPORT = "javascript_import"  # JS: import x from 'y' / require('x')
     INCLUDE_LOCAL = "include_local"   # C/C++: #include "local.h"
     INCLUDE_SYSTEM = "include_system" # C/C++: #include <system>
     UNKNOWN = "unknown"
@@ -33,6 +34,8 @@ class Language(str, Enum):
     JAVA = "java"
     KOTLIN = "kotlin"
     CPP = "cpp"
+    JAVASCRIPT = "javascript"
+    TYPESCRIPT = "typescript"
     UNKNOWN = "unknown"
 
 
@@ -190,6 +193,8 @@ class GraphStats:
     java_files: int
     kotlin_files: int
     cpp_files: int
+    javascript_files: int
+    typescript_files: int
     unknown_files: int
     internal_edges: int
     external_edges: int
@@ -376,6 +381,7 @@ class CallGraphStats:
     java_symbols: int = 0
     kotlin_symbols: int = 0
     cpp_symbols: int = 0
+    javascript_symbols: int = 0
 
 
 @dataclass
@@ -467,6 +473,11 @@ def get_language_from_suffix(suffix: str) -> Language:
         ".hh": Language.CPP,
         ".hpp": Language.CPP,
         ".hxx": Language.CPP,
+        ".js": Language.JAVASCRIPT,
+        ".jsx": Language.JAVASCRIPT,
+        ".mjs": Language.JAVASCRIPT,
+        ".ts": Language.TYPESCRIPT,
+        ".tsx": Language.TYPESCRIPT,
     }
     return mapping.get(suffix.lower(), Language.UNKNOWN)
 
@@ -489,6 +500,8 @@ class TestSelectionResult:
     blast_radius_percent: float
     max_blast_reached: bool
     fallback_all: bool
+    coverage_confidence: float = 0.0   # v1.0: % of changed symbols reachable from selected tests
+    changed_symbols: list[str] = field(default_factory=list)  # v1.0: symbol names changed
 
 
 # ---------------------------------------------------------------------------

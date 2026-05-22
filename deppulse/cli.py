@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import subprocess
 import time
 from pathlib import Path
 from typing import Optional
@@ -880,6 +881,7 @@ def _cmd_tests(args: argparse.Namespace) -> int:
 
     # Get changed files
     changed_files: list[str]
+    diff_output: str = ""
     if args.files:
         changed_files = [str(f).replace("\\", "/") for f in args.files]
     elif args.since:
@@ -888,12 +890,16 @@ def _cmd_tests(args: argparse.Namespace) -> int:
             return 1
         from deppulse.git import get_changed_files
         changed_files = get_changed_files(project_path, ref=args.since)
+        # Get git diff output for DiffParser
+        diff_output = _get_git_diff(project_path, ref=args.since)
     else:
         if not is_git_repo(project_path):
             ui.console.print("[yellow]Not a git repository. Use --files to specify files directly.[/yellow]")
             return 1
         from deppulse.git import get_changed_files
         changed_files = get_changed_files(project_path)
+        # Get git diff output for DiffParser
+        diff_output = _get_git_diff(project_path)
 
     if not changed_files:
         ui.console.print("[green]No changed files detected.[/green]")
@@ -902,10 +908,15 @@ def _cmd_tests(args: argparse.Namespace) -> int:
     # Run the scan
     result, G, _ = _run_scan(project_path, config, use_cache=not args.no_cache)
 
-    # Select tests
+    # Select tests using DiffParser for line-level analysis
     from deppulse.core.test_selector import TestSelector
     selector = TestSelector(G, config=config)
-    test_result = selector.select_tests(changed_files, max_blast=args.max_blast)
+    test_result = selector.select_tests(
+        changed_files,
+        max_blast=args.max_blast,
+        diff_output=diff_output,
+        project_root=project_path,
+    )
 
     # Output based on format
     if args.format == "json":
@@ -918,6 +929,8 @@ def _cmd_tests(args: argparse.Namespace) -> int:
             "blast_radius_percent": test_result.blast_radius_percent,
             "max_blast_reached": test_result.max_blast_reached,
             "fallback_all": test_result.fallback_all,
+            "coverage_confidence": test_result.coverage_confidence,
+            "changed_symbols": test_result.changed_symbols,
         }
         ui.render_json_output(data)
     elif args.format == "args":
@@ -925,7 +938,26 @@ def _cmd_tests(args: argparse.Namespace) -> int:
     else:  # list
         ui.render_test_selection(test_result)
 
+    # Warn if confidence is low
+    if test_result.coverage_confidence < 0.5 and test_result.coverage_confidence > 0:
+        ui.console.print(
+            f"[yellow]Warning: coverage confidence is {test_result.coverage_confidence:.0%}. "
+            f"Consider running more tests or reviewing manually.[/yellow]"
+        )
+
     return 0
+
+
+def _get_git_diff(project_path: Path, ref: str = "HEAD") -> str:
+    """Get git diff output for DiffParser."""
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(project_path), "diff", "--unified=0", ref, "HEAD"],
+            capture_output=True, text=True, timeout=30,
+        )
+        return result.stdout
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return ""
 
 
 def _cmd_snapshot(args: argparse.Namespace) -> int:

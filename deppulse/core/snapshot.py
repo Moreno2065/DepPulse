@@ -183,7 +183,7 @@ class SnapshotManager:
                 cycles_json.append({"nodes": c.nodes, "length": c.length})
 
         snapshot_data = {
-            "version": "1.0",
+            "schema_version": "2.0",
             "tag": tag,
             "commit_hash": commit_hash,
             "commit_message": commit_msg,
@@ -242,7 +242,7 @@ class SnapshotManager:
                 return json.loads(self._index_path.read_text(encoding="utf-8"))
             except (json.JSONDecodeError, OSError):
                 pass
-        return {"version": "1.0", "snapshots": []}
+        return {"schema_version": "2.0", "snapshots": []}
 
     # ------------------------------------------------------------------
     # Load
@@ -290,6 +290,9 @@ class SnapshotManager:
     def _load_from_file(self, file_path: Path) -> SnapshotMeta:
         """Reconstruct SnapshotMeta from a JSON snapshot file."""
         data = json.loads(file_path.read_text(encoding="utf-8"))
+
+        # Handle both v1.0 (version="1.0") and v2.0 (schema_version="2.0")
+        schema_version = data.get("schema_version") or data.get("version", "1.0")
 
         file_metrics: dict[str, FileMetrics] = {}
         for path_str, m_dict in data.get("file_metrics", {}).items():

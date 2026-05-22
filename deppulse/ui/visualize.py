@@ -214,365 +214,706 @@ def render_html_dashboard(
     """
     Generate a standalone interactive HTML dependency dashboard.
 
-    Uses D3.js force-directed graph for visualization. All JS/CSS is embedded.
+    Renders a "dependency constellation" — files as luminous nodes, dependencies
+    as curved directional arcs. The visual language borrows from astronomical star
+    charts: core files shine brightest, dependency flows trace orbital paths.
     """
-    # Gather node data
+    import json as _json
+
+    # ---- Gather node / edge data ----------------------------------------
     nodes_data: list[dict] = []
     edges_data: list[dict] = []
     lang_map = {
-        ".py": "python",
-        ".java": "java",
-        ".kt": "kotlin",
-        ".kts": "kotlin",
-        ".c": "cpp",
-        ".cpp": "cpp",
-        ".h": "cpp",
-        ".hpp": "cpp",
-        ".cc": "cpp",
-        ".cxx": "cpp",
+        ".py": "python", ".java": "java", ".kt": "kotlin", ".kts": "kotlin",
+        ".c": "cpp", ".cpp": "cpp", ".h": "cpp", ".hpp": "cpp",
+        ".cc": "cpp", ".cxx": "cpp",
     }
-
     lang_colors = {
-        "python": "#4B8BBE",
-        "java": "#B07219",
-        "kotlin": "#A18B00",
-        "cpp": "#F34B7D",
+        "python": "#1e3a5f", "java": "#7a3a1a",
+        "kotlin": "#6b4f14", "cpp": "#7a2038",
     }
-
     node_ids: dict[str, int] = {}
-
-    # Add phantom edges for unresolved dependencies
-    for scan_result in result.scan_results:
-        for resolved in scan_result.unresolved_dependencies:
-            # Just track unresolved counts
-            pass
+    deps_of: dict[str, list[str]] = {}
+    rdeps_of: dict[str, list[str]] = {}
 
     for i, node in enumerate(graph.nodes()):
-        data = graph.nodes[node] if node in graph.nodes else {}
-        suffix = data.get("suffix", Path(node).suffix)
+        attrs = graph.nodes[node] if node in graph.nodes else {}
+        suffix = attrs.get("suffix", Path(node).suffix)
         lang = lang_map.get(suffix, "unknown")
         in_deg = graph.in_degree(node)
         out_deg = graph.out_degree(node)
-
         node_ids[node] = i
         nodes_data.append({
             "id": node,
             "name": Path(node).name,
             "lang": lang,
-            "lang_color": lang_colors.get(lang, "#AAAAAA"),
+            "lang_color": lang_colors.get(lang, "#94a3b8"),
             "group": lang,
-            "size": max(4, min(20, in_deg + 3)),  # size by fan-in
+            "size": max(4.5, min(28, int(in_deg ** 0.65) + 5)),
             "in_deg": in_deg,
             "out_deg": out_deg,
+            "dir": str(Path(node).parent),
+            "bytes": attrs.get("size_bytes", 0),
+            "symbols": attrs.get("symbol_count", 0),
         })
 
     for u, v, data in graph.edges(data=True):
         if u in node_ids and v in node_ids:
+            src_lang = nodes_data[node_ids[u]]["lang"]
             edges_data.append({
-                "source": u,
-                "target": v,
-                "kind": data.get("kind", "unknown"),
-                "line_number": data.get("line_number", 0),
+                "source": u, "target": v,
+                "kind": str(data.get("kind", "unknown")),
+                "line": data.get("line_number", 0),
+                "color": lang_colors.get(src_lang, "#94a3b8"),
             })
+            deps_of.setdefault(u, []).append(v)
+            rdeps_of.setdefault(v, []).append(u)
 
-    import json
+    for nd in nodes_data:
+        nid = nd["id"]
+        nd["deps"] = deps_of.get(nid, [])
+        nd["rdeps"] = rdeps_of.get(nid, [])
 
-    html_content = f"""<!DOCTYPE html>
+    stats = result.stats
+    stats_data = {
+        "total_files": stats.total_files,
+        "total_edges": stats.total_edges,
+        "files_with_cycles": stats.files_with_cycles,
+    }
+
+    # ---- HTML template (placeholders avoid f-string brace escaping) -----
+    _t = r"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>DepPulse — Dependency Dashboard</title>
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>DepPulse — Dependency Constellation</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@300;500;700&family=JetBrains+Mono:ital,wght@0,400;0,500;1,400&display=swap" rel="stylesheet">
 <script src="https://d3js.org/d3.v7.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/dagre/0.8.5/dagre.min.js"></script>
 <style>
-  * {{ box-sizing: border-box; margin: 0; padding: 0; }}
-  body {{
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    background: #0f1419;
-    color: #e6edf3;
-    overflow: hidden;
-  }}
-  #header {{
-    position: fixed; top: 0; left: 0; right: 0;
-    height: 48px;
-    background: rgba(15,20,25,0.95);
-    border-bottom: 1px solid #30363d;
-    display: flex; align-items: center; padding: 0 16px;
-    gap: 24px;
-    z-index: 100;
-  }}
-  #header h1 {{
-    font-size: 16px; font-weight: 600; color: #58a6ff;
-  }}
-  #stats {{
-    font-size: 12px; color: #8b949e;
-    display: flex; gap: 16px;
-  }}
-  #stats span {{ display: flex; align-items: center; gap: 4px; }}
-  #stats .val {{ color: #e6edf3; font-weight: 500; }}
-  #graph-container {{
-    position: fixed; top: 48px; left: 0; right: 0; bottom: 0;
-  }}
-  svg {{
-    width: 100%; height: 100%; display: block;
-  }}
-  .node circle {{
-    stroke: rgba(255,255,255,0.2);
-    stroke-width: 1.5px;
-    cursor: pointer;
-    transition: r 0.2s;
-  }}
-  .node circle:hover {{
-    stroke: #fff;
-    stroke-width: 2px;
-  }}
-  .node text {{
-    font-size: 9px;
-    fill: #e6edf3;
-    text-anchor: middle;
-    pointer-events: none;
-    dominant-baseline: middle;
-  }}
-  .link {{
-    stroke: #30363d;
-    stroke-opacity: 0.5;
-    stroke-width: 1px;
-  }}
-  .link:hover {{
-    stroke: #58a6ff;
-    stroke-opacity: 1;
-  }}
-  #tooltip {{
-    position: fixed;
-    background: rgba(22,27,34,0.97);
-    border: 1px solid #30363d;
-    border-radius: 6px;
-    padding: 8px 12px;
-    font-size: 12px;
-    pointer-events: none;
-    display: none;
-    z-index: 200;
-    max-width: 280px;
-  }}
-  #tooltip .path {{ color: #58a6ff; word-break: break-all; font-family: monospace; font-size: 11px; }}
-  #tooltip .meta {{ margin-top: 4px; color: #8b949e; }}
-  #tooltip .lang {{ display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 10px; }}
-  #legend {{
-    position: fixed; bottom: 16px; right: 16px;
-    background: rgba(22,27,34,0.9);
-    border: 1px solid #30363d;
-    border-radius: 6px;
-    padding: 10px 14px;
-    font-size: 11px;
-    z-index: 100;
-  }}
-  #legend .title {{ color: #8b949e; margin-bottom: 6px; font-weight: 500; }}
-  #legend .item {{ display: flex; align-items: center; gap: 6px; margin: 3px 0; }}
-  #legend .dot {{
-    width: 10px; height: 10px; border-radius: 50%;
-    flex-shrink: 0;
-  }}
-  #controls {{
-    position: fixed; top: 56px; left: 16px;
-    background: rgba(22,27,34,0.9);
-    border: 1px solid #30363d;
-    border-radius: 6px;
-    padding: 10px 14px;
-    font-size: 11px;
-    z-index: 100;
-    display: flex; flex-direction: column; gap: 8px;
-    min-width: 160px;
-  }}
-  #controls .title {{ color: #8b949e; font-weight: 500; margin-bottom: 2px; }}
-  #controls button {{
-    background: #21262d; color: #c9d1d9; border: 1px solid #30363d;
-    border-radius: 4px; padding: 4px 8px; font-size: 11px; cursor: pointer;
-    transition: background 0.15s;
-  }}
-  #controls button:hover {{ background: #30363d; }}
-  #info-panel {{
-    position: fixed; top: 56px; right: 16px;
-    width: 260px;
-    background: rgba(22,27,34,0.95);
-    border: 1px solid #30363d;
-    border-radius: 6px;
-    padding: 12px;
-    font-size: 12px;
-    z-index: 100;
-    display: none;
-  }}
-  #info-panel h3 {{ color: #58a6ff; font-size: 13px; margin-bottom: 8px; }}
-  #info-panel .row {{ display: flex; justify-content: space-between; margin: 4px 0; color: #8b949e; }}
-  #info-panel .row .v {{ color: #e6edf3; }}
+/* ============================================================
+   DEPPULSE — Dependency Constellation
+   Light editorial theme
+   ============================================================ */
+:root {
+  --bg-deep:    #fafaf7;
+  --bg-surface: #f0eee8;
+  --bg-card:    #ffffff;
+  --border:     #d4d0c8;
+  --text-dim:   #8b8680;
+  --text-body:  #4a4540;
+  --text-bright:#1a1815;
+  --amber:      #d97706;
+  --amber-glow: #d9770640;
+  --cyan:       #0891b2;
+  --cyan-glow:  #0891b240;
+  --rose:       #e11d48;
+  --python:     #2563a0;
+  --java:       #d97026;
+  --kotlin:     #b88a1f;
+  --cpp:        #d9415c;
+  --other:      #787670;
+  --risk-high:  #dc2626;
+  --risk-mid:   #d97706;
+  --font-ui:    'Sora',system-ui,sans-serif;
+  --font-mono:  'JetBrains Mono',monospace;
+}
+* { box-sizing:border-box; margin:0; padding:0; }
+body {
+  font-family:var(--font-ui); background:var(--bg-deep);
+  color:var(--text-body); overflow:hidden; height:100vh; width:100vw;
+  user-select:none; -webkit-font-smoothing:antialiased;
+}
+#starfield {
+  position:fixed; top:0; left:0; width:100%; height:100%;
+  pointer-events:none; z-index:0; opacity:0.4;
+}
+/* ---- Top bar ---- */
+#topbar {
+  position:fixed; top:0; left:0; right:0; height:52px;
+  background:rgba(250,250,247,0.94); backdrop-filter:blur(12px);
+  -webkit-backdrop-filter:blur(12px);
+  border-bottom:1px solid var(--border);
+  display:flex; align-items:center; padding:0 20px; gap:28px; z-index:100;
+}
+#topbar .logo {
+  font-size:18px; font-weight:700; letter-spacing:-0.3px;
+  color:var(--text-bright);
+}
+#topbar .stats { display:flex; gap:18px; font-size:12px; color:var(--text-dim); }
+#topbar .stats .val { color:var(--text-bright); font-weight:500; font-feature-settings:"tnum"; }
+#topbar .search-wrap { margin-left:auto; position:relative; }
+#topbar .search-wrap input {
+  background:var(--bg-card); border:1px solid var(--border);
+  border-radius:8px; padding:6px 12px 6px 32px; font-size:13px;
+  color:var(--text-bright); width:220px;
+  font-family:var(--font-mono); outline:none;
+  transition:border-color 0.2s, box-shadow 0.2s;
+}
+#topbar .search-wrap input:focus {
+  border-color:var(--cyan); box-shadow:0 0 0 3px var(--cyan-glow);
+}
+#topbar .search-wrap .search-icon {
+  position:absolute; left:10px; top:50%; transform:translateY(-50%);
+  color:var(--text-dim); font-size:14px; pointer-events:none;
+}
+#topbar .search-results {
+  display:none; position:absolute; top:100%; right:0; margin-top:4px;
+  background:var(--bg-card); border:1px solid var(--border);
+  border-radius:8px; padding:4px; min-width:220px; max-height:240px;
+  overflow-y:auto; box-shadow:0 4px 16px rgba(0,0,0,0.1);
+}
+#topbar .search-results .sr-item {
+  padding:5px 10px; font-size:12px; font-family:var(--font-mono);
+  color:var(--text-body); border-radius:4px; cursor:pointer;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+}
+#topbar .search-results .sr-item:hover,
+#topbar .search-results .sr-item.active { background:var(--bg-surface); color:var(--text-bright); }
+
+/* ---- Graph ---- */
+#graph-container { position:fixed; top:52px; left:0; right:0; bottom:0; z-index:1; }
+#graph-container svg { width:100%; height:100%; }
+
+.link-path {
+  fill:none; stroke-width:2px; stroke-linecap:round;
+  opacity:0.65; transition:opacity 0.2s, stroke-width 0.2s;
+}
+.link-path.dimmed { opacity:0.06; }
+.link-path.highlighted { opacity:0.95; stroke-width:3px; filter:url(#glow-edge); }
+
+.node-group { cursor:pointer; }
+.node-group .node-halo {
+  fill:none; stroke-width:2.5px; opacity:0;
+  transition:opacity 0.25s, r 0.25s;
+}
+.node-group:hover .node-halo,
+.node-group.pinned .node-halo { opacity:0.7; }
+.node-group .node-core { transition:r 0.25s, fill 0.25s; }
+.node-group:hover .node-core { filter:brightness(1.15); }
+.node-group.dimmed { opacity:0.12; pointer-events:none; }
+.node-group .node-label {
+  font-family:var(--font-mono); font-size:9px; letter-spacing:-0.2px;
+  fill:var(--text-body); text-anchor:middle; dominant-baseline:middle;
+  pointer-events:none; transition:fill 0.25s, font-size 0.25s;
+}
+.node-group:hover .node-label { fill:var(--text-bright); font-size:10px; }
+.node-group.dimmed .node-label { opacity:0; }
+.node-group.risk-high .node-halo { animation:riskPulse 2.5s ease-in-out infinite; }
+@keyframes riskPulse {
+  0%,100% { stroke-opacity:0.4; }
+  50% { stroke-opacity:1; }
+}
+
+/* ---- Floating panels ---- */
+.floating {
+  position:fixed; z-index:50;
+  background:rgba(255,255,255,0.92); backdrop-filter:blur(10px);
+  -webkit-backdrop-filter:blur(10px);
+  border:1px solid var(--border); border-radius:10px;
+  padding:12px 14px; font-size:12px;
+  box-shadow:0 1px 4px rgba(0,0,0,0.06);
+}
+#filter-panel { top:68px; left:16px; }
+#filter-panel .title { color:var(--text-dim); font-weight:500; margin-bottom:8px; font-size:11px; text-transform:uppercase; letter-spacing:0.5px; }
+#filter-panel .f-row {
+  display:flex; align-items:center; gap:8px; margin:4px 0;
+  cursor:pointer; padding:3px 0; transition:opacity 0.2s;
+}
+#filter-panel .f-row.off { opacity:0.35; }
+#filter-panel .f-dot { width:10px; height:10px; border-radius:50%; flex-shrink:0; }
+#filter-panel .f-label { color:var(--text-body); font-size:11px; }
+#filter-panel .f-count { color:var(--text-dim); font-size:10px; margin-left:auto; }
+
+#controls { top:68px; left:170px; }
+#controls button {
+  margin:3px 4px 3px 0; background:var(--bg-card); color:var(--text-body);
+  border:1px solid var(--border); border-radius:6px;
+  padding:5px 10px; font-size:11px; font-family:var(--font-ui);
+  cursor:pointer; transition:all 0.15s;
+}
+#controls button:hover { background:var(--bg-surface); color:var(--text-bright); border-color:var(--text-dim); }
+
+#detail-panel {
+  top:68px; right:16px; width:290px; max-height:calc(100vh - 100px);
+  overflow-y:auto; display:none; padding:0;
+}
+#detail-panel.open { display:block; }
+#detail-panel .dp-header { padding:14px 16px; border-bottom:1px solid var(--border); }
+#detail-panel .dp-header .dp-name { font-family:var(--font-mono); font-size:13px; color:var(--text-bright); word-break:break-all; font-weight:500; }
+#detail-panel .dp-header .dp-path { font-family:var(--font-mono); font-size:11px; color:var(--text-dim); word-break:break-all; margin-top:2px; }
+#detail-panel .dp-body { padding:12px 16px; }
+#detail-panel .dp-stat { display:flex; justify-content:space-between; margin:5px 0; font-size:11px; }
+#detail-panel .dp-stat .k { color:var(--text-dim); }
+#detail-panel .dp-stat .v { color:var(--text-bright); font-weight:500; font-feature-settings:"tnum"; }
+#detail-panel .dp-section { margin-top:10px; padding-top:10px; border-top:1px solid var(--border); }
+#detail-panel .dp-section .s-title { font-size:10px; font-weight:500; color:var(--text-dim); text-transform:uppercase; letter-spacing:0.5px; margin-bottom:6px; }
+#detail-panel .dp-file { font-family:var(--font-mono); font-size:10px; color:var(--text-body); padding:2px 0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; cursor:pointer; transition:color 0.15s; }
+#detail-panel .dp-file:hover { color:var(--cyan); }
+#detail-panel .dp-close { position:absolute; top:8px; right:12px; background:none; border:none; color:var(--text-dim); font-size:18px; cursor:pointer; padding:2px 6px; border-radius:4px; }
+#detail-panel .dp-close:hover { color:var(--text-bright); background:var(--bg-surface); }
+
+#tooltip {
+  position:fixed; z-index:200; pointer-events:none; display:none;
+  background:rgba(255,255,255,0.97); border:1px solid var(--border);
+  border-radius:8px; padding:8px 12px; font-size:11px;
+  box-shadow:0 2px 12px rgba(0,0,0,0.1); max-width:280px;
+}
+#tooltip .tt-path { font-family:var(--font-mono); font-size:11px; color:var(--cyan); word-break:break-all; }
+#tooltip .tt-meta { margin-top:4px; color:var(--text-dim); display:flex; gap:10px; }
+#tooltip .tt-lang { display:inline-block; padding:1px 6px; border-radius:3px; color:#fff; font-size:10px; }
+
+#legend { position:fixed; bottom:20px; right:20px; z-index:50; font-size:10px; }
+#legend .title { color:var(--text-dim); margin-bottom:6px; text-transform:uppercase; letter-spacing:0.5px; }
+#legend .item { display:flex; align-items:center; gap:6px; margin:3px 0; color:var(--text-body); }
+#legend .dot { width:9px; height:9px; border-radius:50%; flex-shrink:0; }
+
+#hint-bar { position:fixed; bottom:20px; left:50%; transform:translateX(-50%); z-index:50; color:var(--text-dim); font-size:10px; letter-spacing:0.3px; transition:opacity 2s; pointer-events:none; }
+
+::-webkit-scrollbar { width:5px; }
+::-webkit-scrollbar-track { background:transparent; }
+::-webkit-scrollbar-thumb { background:var(--border); border-radius:3px; }
 </style>
 </head>
 <body>
-<div id="header">
-  <h1>DepPulse</h1>
-  <div id="stats">
-    <span><span class="val" id="stat-nodes">0</span> files</span>
-    <span><span class="val" id="stat-edges">0</span> deps</span>
-    <span><span class="val" id="stat-python">0</span> Python</span>
-    <span><span class="val" id="stat-java">0</span> Java</span>
-    <span><span class="val" id="stat-kotlin">0</span> Kotlin</span>
+
+<canvas id="starfield"></canvas>
+
+<header id="topbar">
+  <span class="logo">DepPulse</span>
+  <div class="stats">
+    <span><span class="val" id="s-files">0</span> files</span>
+    <span><span class="val" id="s-edges">0</span> deps</span>
+    <span><span class="val" id="s-cycles">0</span> in cycles</span>
   </div>
+  <div class="search-wrap">
+    <span class="search-icon">&#9906;</span>
+    <input type="text" id="search-input" placeholder="Find file..." autocomplete="off">
+    <div class="search-results" id="search-results"></div>
+  </div>
+</header>
+
+<div id="filter-panel" class="floating">
+  <div class="title">Languages</div>
 </div>
 
-<div id="controls">
-  <div class="title">Controls</div>
-  <button id="btn-zoom-in">Zoom In</button>
-  <button id="btn-zoom-out">Zoom Out</button>
-  <button id="btn-reset">Reset View</button>
+<div id="controls" class="floating">
+  <button id="btn-zoom-in">+ Zoom In</button>
+  <button id="btn-zoom-out">&minus; Zoom Out</button>
+  <button id="btn-reset">Reset</button>
+  <button id="btn-auto">Auto Layout</button>
 </div>
 
-<div id="graph-container"></div>
+<main id="graph-container"></main>
+
+<div id="detail-panel" class="floating">
+  <button class="dp-close" id="dp-close">&times;</button>
+  <div class="dp-header">
+    <div class="dp-name" id="dp-name"></div>
+    <div class="dp-path" id="dp-path"></div>
+  </div>
+  <div class="dp-body" id="dp-body"></div>
+</div>
 
 <div id="tooltip">
-  <div class="path"></div>
-  <div class="meta">
-    <span class="lang"></span>
-    <span class="deg"></span>
+  <div class="tt-path"></div>
+  <div class="tt-meta">
+    <span class="tt-lang"></span>
+    <span class="tt-deg"></span>
   </div>
 </div>
 
-<div id="legend">
-  <div class="title">Language</div>
-  <div class="item"><div class="dot" style="background:#4B8BBE"></div> Python</div>
-  <div class="item"><div class="dot" style="background:#B07219"></div> Java</div>
-  <div class="item"><div class="dot" style="background:#A18B00"></div> Kotlin</div>
-  <div class="item"><div class="dot" style="background:#F34B7D"></div> C/C++</div>
-  <div class="item"><div class="dot" style="background:#AAAAAA"></div> Other</div>
+<div id="legend" class="floating">
+  <div class="title">Languages</div>
 </div>
 
+<div id="hint-bar">Scroll to zoom &middot; Drag to pan &middot; Click a node for details &middot; Hover to trace connections</div>
+
 <script>
-const DATA = {{
-  nodes: {json.dumps(nodes_data, ensure_ascii=False)},
-  edges: {json.dumps(edges_data, ensure_ascii=False)}
-}};
+// ============================================================
+// DEPPULSE — Dependency Constellation
+// Force-directed graph with curved edges, starfield, detail panel
+// ============================================================
 
-// Update stats
-document.getElementById('stat-nodes').textContent = DATA.nodes.length;
-document.getElementById('stat-edges').textContent = DATA.edges.length;
-const langCounts = {{}};
-DATA.nodes.forEach(n => {{ langCounts[n.lang] = (langCounts[n.lang] || 0) + 1; }});
-if (langCounts.python) document.getElementById('stat-python').textContent = langCounts.python;
-if (langCounts.java) document.getElementById('stat-java').textContent = langCounts.java;
-if (langCounts.kotlin) document.getElementById('stat-kotlin').textContent = langCounts.kotlin;
+const NODES = __NODES__;
+const EDGES = __EDGES__;
+const STATS = __STATS__;
+const LANG_COLORS = { python:'#1e3a5f', java:'#7a3a1a', kotlin:'#6b4f14', cpp:'#7a2038', unknown:'#44403c' };
 
-// Build id->index map
-const idMap = {{}};
-DATA.nodes.forEach((n, i) => {{ idMap[n.id] = i; }});
+// --- Derived maps ---
+const nodeMap = {};
+const depMap = {};   // id -> [target ids]
+const rdepMap = {};  // id -> [source ids]
+NODES.forEach(n => { nodeMap[n.id] = n; depMap[n.id] = n.deps || []; rdepMap[n.id] = n.rdeps || []; });
 
-// D3 force-directed graph
+// --- State ---
+let selectedNode = null;
+let langFilter = { python:true, java:true, kotlin:true, cpp:true, unknown:true };
+
+// --- Starfield canvas ---
+(function() {
+  const c = document.getElementById('starfield'), ctx = c.getContext('2d');
+  let stars = [];
+  function resize() { c.width = window.innerWidth; c.height = window.innerHeight; }
+  resize(); window.addEventListener('resize', resize);
+  const n = Math.min(350, Math.floor((window.innerWidth * window.innerHeight) / 4000));
+  for (let i = 0; i < n; i++) {
+    stars.push({ x:Math.random()*c.width, y:Math.random()*c.height, r:Math.random()*1.0+0.2, phase:Math.random()*Math.PI*2, speed:Math.random()*0.006+0.002, alpha:Math.random()*0.15+0.08 });
+  }
+  function draw(ts) {
+    ctx.clearRect(0, 0, c.width, c.height);
+    for (const s of stars) {
+      const a = s.alpha + 0.15 * Math.sin(s.phase + ts * s.speed);
+      ctx.beginPath(); ctx.arc(s.x, s.y, s.r, 0, Math.PI*2);
+      ctx.fillStyle = 'rgba(180,175,165,'+a.toFixed(3)+')'; ctx.fill();
+    }
+    requestAnimationFrame(draw);
+  }
+  requestAnimationFrame(draw);
+})();
+
+// --- D3 init ---
 const container = document.getElementById('graph-container');
-const width = container.clientWidth;
-const height = container.clientHeight;
+let W = container.clientWidth, H = container.clientHeight;
+const svg = d3.select('#graph-container').append('svg').attr('width',W).attr('height',H);
+const defs = svg.append('defs');
+defs.append('filter').attr('id','glow-node').attr('x','-50%').attr('y','-50%').attr('width','200%').attr('height','200%')
+  .html('<feGaussianBlur stdDeviation="2.5" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>');
+defs.append('filter').attr('id','glow-edge').attr('x','-20%').attr('y','-20%').attr('width','140%').attr('height','140%')
+  .html('<feGaussianBlur stdDeviation="1.5" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>');
+['python','java','kotlin','cpp','unknown'].forEach(lang => {
+  defs.append('marker').attr('id','arrow-'+lang).attr('viewBox','0 0 8 6').attr('refX',8).attr('refY',3).attr('markerWidth',6).attr('markerHeight',4).attr('orient','auto')
+    .append('path').attr('d','M0,0 L8,3 L0,6 Z').attr('fill',LANG_COLORS[lang]).attr('opacity',0.75);
+});
 
-const svg = d3.select('#graph-container')
-  .append('svg')
-  .attr('width', width)
-  .attr('height', height);
-
-const g = svg.append('g');
-
-const zoom = d3.zoom()
-  .scaleExtent([0.05, 4])
-  .on('zoom', (event) => {{ g.attr('transform', event.transform); }});
-
+const gLinks = svg.append('g').attr('class','links');
+const gNodes = svg.append('g').attr('class','nodes');
+const zoom = d3.zoom().scaleExtent([0.04,5]).on('zoom', function(e) {
+  gNodes.attr('transform', e.transform); gLinks.attr('transform', e.transform);
+});
 svg.call(zoom);
 
-const simulation = d3.forceSimulation(DATA.nodes)
-  .force('link', d3.forceLink(DATA.edges)
-    .id(d => d.id)
-    .distance(60)
-    .strength(0.3))
-  .force('charge', d3.forceManyBody().strength(-120))
-  .force('center', d3.forceCenter(width / 2, height / 2))
-  .force('collision', d3.forceCollide().radius(d => d.size + 4));
+// --- Dagre hierarchical layout (left-to-right flowchart) ---
+function runDagreLayout() {
+  const g = new dagre.graphlib.Graph();
+  g.setGraph({ rankdir: 'LR', nodesep: 45, edgesep: 15, ranksep: 90, marginx: 30, marginy: 30 });
+  g.setDefaultEdgeLabel(function() { return {}; });
 
-const link = g.append('g')
-  .selectAll('.link')
-  .data(DATA.edges)
-  .join('line')
-  .attr('class', 'link')
-  .attr('title', d => `${{d.source.id || d.source}} → ${{d.target.id || d.target}} (${{d.kind}})`);
+  NODES.forEach(function(n) {
+    g.setNode(n.id, { width: n.size * 7, height: n.size * 3.5 });
+  });
+  EDGES.forEach(function(e) {
+    g.setEdge(e.source, e.target);
+  });
 
-const node = g.append('g')
-  .selectAll('.node')
-  .data(DATA.nodes)
-  .join('g')
-  .attr('class', 'node')
-  .call(d3.drag()
-    .on('start', (event, d) => {{
-      if (!event.active) simulation.alphaTarget(0.3).restart();
-      d.fx = d.x; d.fy = d.y;
-    }})
-    .on('drag', (event, d) => {{
-      d.fx = event.x; d.fy = event.y;
-    }})
-    .on('end', (event, d) => {{
-      if (!event.active) simulation.alphaTarget(0);
-      d.fx = null; d.fy = null;
-    }}));
+  dagre.layout(g);
 
-node.append('circle')
-  .attr('r', d => d.size)
-  .attr('fill', d => d.lang_color)
-  .attr('stroke', d => d.in_deg > 5 ? '#e74c3c' : 'rgba(255,255,255,0.15)');
+  NODES.forEach(function(n) {
+    var dn = g.node(n.id);
+    n.x = dn.x; n.y = dn.y;
+  });
+}
+runDagreLayout();
 
-node.append('text')
-  .text(d => d.name.length > 14 ? d.name.slice(0, 12) + '..' : d.name)
-  .attr('dy', d => d.size + 10);
+// --- Smooth cubic bezier paths (horizontal-first, clean flowchart curves) ---
+function smoothPath(d) {
+  // Resolve source/target: with dagre they're string IDs, not node refs
+  const s = typeof d.source === 'object' ? d.source : (nodeMap[d.source] || d.source);
+  const t = typeof d.target === 'object' ? d.target : (nodeMap[d.target] || d.target);
+  const sx = s.x, sy = s.y, tx = t.x, ty = t.y;
+  if (isNaN(sx) || isNaN(tx)) return '';
+  // For self-loops or nearly vertical edges, use a quadratic curve
+  if (Math.abs(tx - sx) < 5) {
+    const mx = sx + 30, my = (sy + ty) / 2;
+    return 'M'+sx+','+sy+' Q'+mx+','+my+' '+tx+','+ty;
+  }
+  // Horizontal-first cubic bezier: exit right, enter left
+  const mx = sx + Math.abs(tx - sx) * 0.4;
+  return 'M'+sx+','+sy+' C'+mx+','+sy+' '+mx+','+ty+' '+tx+','+ty;
+}
+
+// --- Render edges ---
+let linkPaths = gLinks.selectAll('path').data(EDGES).join('path')
+  .attr('class','link-path')
+  .attr('stroke', function(d) { return d.color; })
+  .attr('marker-end', function(d) {
+    const lang = nodeMap[d.source.id] ? nodeMap[d.source.id].lang : 'unknown';
+    return 'url(#arrow-'+lang+')';
+  })
+  .attr('d', smoothPath);
+
+// --- Render nodes ---
+let nodeGroups = gNodes.selectAll('g.node-group').data(NODES).join('g')
+  .attr('class', function(d) { return 'node-group' + (d.in_deg > 8 ? ' risk-high' : ''); });
+
+nodeGroups.append('circle').attr('class','node-halo')
+  .attr('r', function(d) { return d.size + 4; })
+  .attr('stroke', function(d) { return d.lang_color; })
+  .attr('fill','none');
+
+nodeGroups.append('circle').attr('class','node-core')
+  .attr('r', function(d) { return d.size; })
+  .attr('fill', function(d) { return d.lang_color; })
+  .attr('stroke', function(d) { return d.in_deg > 8 ? '#f87171' : 'rgba(255,255,255,0.15)'; })
+  .attr('stroke-width', function(d) { return d.in_deg > 8 ? 1.8 : 1; });
+
+nodeGroups.append('text').attr('class','node-label')
+  .text(function(d) { return d.name.length > 16 ? d.name.slice(0,14)+'..' : d.name; })
+  .attr('dy', function(d) { return d.size + 9; });
+
+// --- Position nodes (dagre gives absolute coords) ---
+nodeGroups.attr('transform', function(d) { return 'translate('+d.x+','+d.y+')'; });
+linkPaths.attr('d', smoothPath);
+
+// --- Interaction: hover -> highlight connected ---
+function connectedSet(nodeId, maxDepth) {
+  const visited = new Set([nodeId]), frontier = [nodeId];
+  for (let depth = 0; depth < maxDepth && frontier.length; depth++) {
+    const next = [];
+    for (const id of frontier) {
+      for (const t of (depMap[id]||[])) { if (!visited.has(t)) { visited.add(t); next.push(t); } }
+      for (const s of (rdepMap[id]||[])) { if (!visited.has(s)) { visited.add(s); next.push(s); } }
+    }
+    frontier.splice(0, frontier.length, ...next);
+  }
+  return visited;
+}
+
+function highlightNode(nodeId) {
+  if (!nodeId) {
+    nodeGroups.classed('dimmed', false);
+    linkPaths.classed('dimmed', false).classed('highlighted', false);
+    return;
+  }
+  const connected = connectedSet(nodeId, 2);
+  nodeGroups.classed('dimmed', function(d) { return !connected.has(d.id); });
+  linkPaths.classed('dimmed', function(d) { return !connected.has(d.source.id) && !connected.has(d.target.id); });
+  linkPaths.classed('highlighted', function(d) { return d.source.id === nodeId || d.target.id === nodeId; });
+}
 
 const tooltip = document.getElementById('tooltip');
+const detailPanel = document.getElementById('detail-panel');
 
-node.on('mouseover', (event, d) => {{
-  tooltip.style.display = 'block';
-  tooltip.style.left = (event.clientX + 12) + 'px';
-  tooltip.style.top = (event.clientY + 12) + 'px';
-  tooltip.querySelector('.path').textContent = d.id;
-  tooltip.querySelector('.lang').textContent = d.lang;
-  tooltip.querySelector('.lang').style.background = d.lang_color;
-  tooltip.querySelector('.deg').textContent = `in:${{d.in_deg}} out:${{d.out_deg}}`;
-}});
+nodeGroups
+  .on('mouseover', function(event, d) {
+    highlightNode(d.id);
+    tooltip.style.display = 'block';
+    tooltip.querySelector('.tt-path').textContent = d.id;
+    tooltip.querySelector('.tt-lang').textContent = d.lang;
+    tooltip.querySelector('.tt-lang').style.background = d.lang_color;
+    tooltip.querySelector('.tt-deg').textContent = 'in:'+d.in_deg+' out:'+d.out_deg;
+  })
+  .on('mousemove', function(event) {
+    tooltip.style.left = (event.clientX + 14) + 'px';
+    tooltip.style.top = (event.clientY + 14) + 'px';
+  })
+  .on('mouseout', function() {
+    if (!selectedNode) highlightNode(null);
+    tooltip.style.display = 'none';
+  })
+  .on('click', function(event, d) {
+    event.stopPropagation();
+    selectNode(d);
+  });
 
-node.on('mousemove', (event) => {{
-  tooltip.style.left = (event.clientX + 12) + 'px';
-  tooltip.style.top = (event.clientY + 12) + 'px';
-}});
+svg.on('click', function() { deselectNode(); });
 
-node.on('mouseout', () => {{
-  tooltip.style.display = 'none';
-}});
+function selectNode(d) {
+  selectedNode = d;
+  nodeGroups.classed('pinned', function(n) { return n.id === d.id; });
+  highlightNode(d.id);
+  showDetail(d);
+}
 
-simulation.on('tick', () => {{
-  link
-    .attr('x1', d => d.source.x)
-    .attr('y1', d => d.source.y)
-    .attr('x2', d => d.target.x)
-    .attr('y2', d => d.target.y);
-  node.attr('transform', d => `translate(${{d.x}},${{d.y}})`);
-}});
+function deselectNode() {
+  selectedNode = null;
+  nodeGroups.classed('pinned', false);
+  highlightNode(null);
+  detailPanel.classList.remove('open');
+}
 
-// Controls
-document.getElementById('btn-zoom-in').onclick = () => svg.transition().call(zoom.scaleBy, 1.3);
-document.getElementById('btn-zoom-out').onclick = () => svg.transition().call(zoom.scaleBy, 0.7);
-document.getElementById('btn-reset').onclick = () => svg.transition().call(zoom.transform, d3.zoomIdentity);
+// --- Detail panel ---
+function showDetail(d) {
+  const n = nodeMap[d.id];
+  document.getElementById('dp-name').textContent = n.name;
+  document.getElementById('dp-path').textContent = d.id;
+  const riskLabel = d.in_deg > 10 ? 'HIGH' : d.in_deg > 5 ? 'MEDIUM' : 'LOW';
+  const riskColor = d.in_deg > 10 ? 'var(--risk-high)' : d.in_deg > 5 ? 'var(--risk-mid)' : 'var(--text-dim)';
+  const kb = n.bytes ? (n.bytes/1024).toFixed(1)+' KB' : '—';
+  const deps = (depMap[d.id]||[]).slice(0,30);
+  const rdeps = (rdepMap[d.id]||[]).slice(0,30);
 
-// Resize handler
-window.addEventListener('resize', () => {{
-  const w = container.clientWidth;
-  const h = container.clientHeight;
-  svg.attr('width', w).attr('height', h);
-  simulation.force('center', d3.forceCenter(w / 2, h / 2));
-  simulation.alpha(0.3).restart();
-}});
+  let h = '<div class="dp-stat"><span class="k">Language</span><span class="v">'+n.lang+'</span></div>';
+  h += '<div class="dp-stat"><span class="k">Size</span><span class="v">'+kb+'</span></div>';
+  h += '<div class="dp-stat"><span class="k">Symbols</span><span class="v">'+(n.symbols||0)+'</span></div>';
+  h += '<div class="dp-stat"><span class="k">In-degree</span><span class="v">'+d.in_deg+'</span></div>';
+  h += '<div class="dp-stat"><span class="k">Out-degree</span><span class="v">'+d.out_deg+'</span></div>';
+  h += '<div class="dp-stat"><span class="k">Risk</span><span class="v" style="color:'+riskColor+'">'+riskLabel+'</span></div>';
+
+  if (rdeps.length) {
+    h += '<div class="dp-section"><div class="s-title">Depended on by ('+(rdepMap[d.id]||[]).length+')</div>';
+    rdeps.forEach(function(f) { h += '<div class="dp-file" data-id="'+f+'">&#8593; '+f+'</div>'; });
+    if ((rdepMap[d.id]||[]).length > 30) h += '<div class="dp-file" style="color:var(--text-dim)">... +'+((rdepMap[d.id]||[]).length-30)+' more</div>';
+    h += '</div>';
+  }
+  if (deps.length) {
+    h += '<div class="dp-section"><div class="s-title">Depends on ('+(depMap[d.id]||[]).length+')</div>';
+    deps.forEach(function(f) { h += '<div class="dp-file" data-id="'+f+'">&#8595; '+f+'</div>'; });
+    if ((depMap[d.id]||[]).length > 30) h += '<div class="dp-file" style="color:var(--text-dim)">... +'+((depMap[d.id]||[]).length-30)+' more</div>';
+    h += '</div>';
+  }
+  document.getElementById('dp-body').innerHTML = h;
+  detailPanel.classList.add('open');
+
+  detailPanel.querySelectorAll('.dp-file[data-id]').forEach(function(el) {
+    el.addEventListener('click', function(e) {
+      e.stopPropagation();
+      const fid = this.getAttribute('data-id');
+      const fn = NODES.find(function(nn) { return nn.id === fid; });
+      if (fn) { zoomToNode(fn); selectNode(fn); }
+    });
+  });
+}
+
+document.getElementById('dp-close').addEventListener('click', function(e) {
+  e.stopPropagation(); deselectNode();
+});
+
+function zoomToNode(d) {
+  const t = d3.zoomIdentity.translate(W/2,H/2).scale(1.8).translate(-d.x,-d.y);
+  svg.transition().duration(500).call(zoom.transform, t);
+}
+
+// --- Search ---
+const searchInput = document.getElementById('search-input');
+const searchResults = document.getElementById('search-results');
+
+searchInput.addEventListener('input', function() {
+  const q = this.value.trim().toLowerCase();
+  if (!q) { searchResults.style.display = 'none'; return; }
+  const matches = NODES.filter(function(n) { return n.id.toLowerCase().includes(q) || n.name.toLowerCase().includes(q); }).slice(0,10);
+  if (!matches.length) { searchResults.style.display = 'none'; return; }
+  searchResults.innerHTML = matches.map(function(n,i) {
+    return '<div class="sr-item'+(i===0?' active':'')+'" data-id="'+n.id+'">'+n.id+'</div>';
+  }).join('');
+  searchResults.style.display = 'block';
+  searchResults.querySelectorAll('.sr-item').forEach(function(el) {
+    el.addEventListener('click', function() {
+      const fid = this.getAttribute('data-id');
+      const fn = NODES.find(function(nn) { return nn.id === fid; });
+      if (fn) { zoomToNode(fn); selectNode(fn); }
+      searchInput.value = ''; searchResults.style.display = 'none';
+    });
+  });
+});
+
+searchInput.addEventListener('keydown', function(e) {
+  if (e.key === 'Escape') { searchInput.value = ''; searchResults.style.display = 'none'; }
+  if (e.key === 'Enter') { var a = searchResults.querySelector('.sr-item.active'); if (a) a.click(); }
+});
+
+searchInput.addEventListener('blur', function() { setTimeout(function() { searchResults.style.display = 'none'; }, 150); });
+
+// --- Language filter toggles ---
+(function() {
+  const counts = {};
+  NODES.forEach(function(n) { counts[n.lang] = (counts[n.lang]||0)+1; });
+  const panel = document.getElementById('filter-panel');
+  ['python','java','kotlin','cpp','unknown'].forEach(function(lang) {
+    if (!counts[lang]) return;
+    var row = document.createElement('div');
+    row.className = 'f-row';
+    row.innerHTML = '<div class="f-dot" style="background:'+(LANG_COLORS[lang]||'#94a3b8')+'"></div><span class="f-label">'+lang.charAt(0).toUpperCase()+lang.slice(1)+'</span><span class="f-count">'+counts[lang]+'</span>';
+    row.addEventListener('click', function() {
+      langFilter[lang] = !langFilter[lang];
+      this.classList.toggle('off', !langFilter[lang]);
+      applyFilters();
+    });
+    panel.appendChild(row);
+  });
+})();
+
+function applyFilters() {
+  var visible = new Set();
+  NODES.forEach(function(n) { if (langFilter[n.lang]) visible.add(n.id); });
+  nodeGroups.style('display', function(d) { return visible.has(d.id) ? null : 'none'; });
+  linkPaths.style('display', function(d) { return visible.has(d.source.id) && visible.has(d.target.id) ? null : 'none'; });
+  // Dagre layout — positions are fixed, just toggle visibility
+}
+
+// --- Legend ---
+(function() {
+  var leg = document.getElementById('legend');
+  ['python','java','kotlin','cpp'].forEach(function(lang) {
+    var item = document.createElement('div');
+    item.className = 'item';
+    item.innerHTML = '<div class="dot" style="background:'+(LANG_COLORS[lang]||'#94a3b8')+'"></div>'+lang.charAt(0).toUpperCase()+lang.slice(1);
+    leg.appendChild(item);
+  });
+})();
+
+// --- Controls ---
+document.getElementById('btn-zoom-in').onclick = function() { svg.transition().duration(200).call(zoom.scaleBy, 1.4); };
+document.getElementById('btn-zoom-out').onclick = function() { svg.transition().duration(200).call(zoom.scaleBy, 0.7); };
+document.getElementById('btn-reset').onclick = function() { svg.transition().duration(400).call(zoom.transform, d3.zoomIdentity); };
+document.getElementById('btn-auto').onclick = function() {
+  runDagreLayout();
+  nodeGroups.transition().duration(400).attr('transform', function(d) { return 'translate('+d.x+','+d.y+')'; });
+  linkPaths.transition().duration(400).attr('d', smoothPath);
+  zoomToFit();
+};
+
+// --- Stats ---
+document.getElementById('s-files').textContent = STATS.total_files;
+document.getElementById('s-edges').textContent = STATS.total_edges;
+document.getElementById('s-cycles').textContent = STATS.files_with_cycles;
+
+// --- Resize ---
+window.addEventListener('resize', function() {
+  W = container.clientWidth; H = container.clientHeight;
+  svg.attr('width', W).attr('height', H);
+});
+
+// --- Keyboard shortcuts ---
+window.addEventListener('keydown', function(e) {
+  if (e.target.tagName === 'INPUT') return;
+  if (e.key === 'Escape') deselectNode();
+  if (e.key === 'f' || e.key === '/') { e.preventDefault(); searchInput.focus(); }
+});
+
+// --- Auto-hide hint ---
+setTimeout(function() {
+  var hint = document.getElementById('hint-bar');
+  hint.style.opacity = '0';
+  setTimeout(function() { hint.remove(); }, 2000);
+}, 12000);
+
+// --- Zoom-to-fit helper ---
+function zoomToFit() {
+  var xs = NODES.map(function(d) { return d.x; }), ys = NODES.map(function(d) { return d.y; });
+  if (!xs.length) return;
+  var minX = Math.min.apply(null,xs), maxX = Math.max.apply(null,xs);
+  var minY = Math.min.apply(null,ys), maxY = Math.max.apply(null,ys);
+  var pad = 60, rw = maxX-minX+pad*2, rh = maxY-minY+pad*2;
+  if (rw < 1 || rh < 1) return;
+  var scale = Math.min(W/rw, H/rh, 1.2);
+  var cx = (minX+maxX)/2, cy = (minY+maxY)/2;
+  svg.transition().duration(800).call(zoom.transform, d3.zoomIdentity.translate(W/2-cx*scale, H/2-cy*scale).scale(scale));
+}
+setTimeout(zoomToFit, 400);
 </script>
 </body>
 </html>"""
 
+    # ---- Inject data & write ---------------------------------------------
+    html = _t.replace("__NODES__", _json.dumps(nodes_data, ensure_ascii=False))
+    html = html.replace("__EDGES__", _json.dumps(edges_data, ensure_ascii=False))
+    html = html.replace("__STATS__", _json.dumps(stats_data, ensure_ascii=False))
+
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(html_content, encoding="utf-8")
+    output_path.write_text(html, encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------

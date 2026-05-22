@@ -40,3 +40,10 @@ Thumbs.db
 *.lock
 package-lock.json
 yarn.lock
+.superpowers/brainstorm/1000-1779428108/content/approaches.html
+.superpowers/brainstorm/1000-1779428108/content/architecture.html
+.superpowers/brainstorm/1000-1779428108/content/risk-model.html
+.superpowers/brainstorm/1000-1779428108/content/scanner-design.html
+.superpowers/brainstorm/1000-1779428108/content/tests-validation.html
+.superpowers/brainstorm/1000-1779428108/content/waiting.html
+.superpowers/brainstorm/1000-1779428108/state/server-info

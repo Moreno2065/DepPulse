@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 from typing import Optional
 
+from deppulse.core.path_resolver import PathResolver
 from deppulse.models import (
     DependencyKind,
     DynamicImport,
@@ -83,11 +84,78 @@ class PythonScanner(BaseScanner):
     - From-import statements: `from x import y`, `from . import z`
     - Relative imports: `from ..pkg import mod`
     - Top-level functions, classes, and methods
+
+    Supports the following redesign properties:
+    - `parser`: Returns this scanner itself (AST parsing via the `ast` module).
+    - `resolver`: Returns the internal `PathResolver` instance.
+    - `parse_file(file_path)`: Parses a file and returns the `ast.parse` tree.
     """
 
     name = "python"
 
     PY_SUFFIXES = frozenset({".py", ".pyw"})
+
+    def __init__(
+        self,
+        project_root: Optional[Path] = None,
+        file_index: Optional[dict[str, Path]] = None,
+    ) -> None:
+        """
+        Initialize the Python scanner with an optional resolver.
+
+        Parameters
+        ----------
+        project_root : Path, optional
+            Absolute path to the project root. Used to initialize the resolver.
+        file_index : dict[str, Path], optional
+            Pre-built mapping of project-relative POSIX path → absolute Path.
+        """
+        self._resolver = PathResolver(project_root or Path.cwd(), file_index)
+
+    # -- Redesign properties --
+
+    @property
+    def parser(self) -> "PythonScanner":
+        """
+        Return the parser for this scanner.
+
+        For PythonScanner this returns the scanner instance itself, since
+        Python uses the built-in `ast` module natively. This property exists
+        for API consistency with other scanners that may use tree-sitter or
+        external parser libraries.
+        """
+        return self
+
+    @property
+    def resolver(self) -> PathResolver:
+        """Return the PathResolver instance used for resolving module paths."""
+        return self._resolver
+
+    def parse_file(self, file_path: Path) -> ast.Module:
+        """
+        Parse a Python file and return the AST tree.
+
+        Parameters
+        ----------
+        file_path : Path
+            Absolute path to the Python source file.
+
+        Returns
+        -------
+        ast.Module
+            The parsed AST module tree.
+
+        Raises
+        ------
+        SyntaxError
+            If the file contains invalid Python syntax.
+        OSError
+            If the file cannot be read.
+        """
+        content = file_path.read_text(encoding="utf-8")
+        return ast.parse(content, filename=str(file_path))
+
+    # -- BaseScanner interface --
 
     def can_scan(self, path: Path) -> bool:
         return path.suffix in self.PY_SUFFIXES

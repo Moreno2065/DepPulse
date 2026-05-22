@@ -70,6 +70,14 @@ DEFAULT_TEST_PATTERNS: frozenset[str] = frozenset({
     "*Test.java",
     "*Spec.kt",
     "*Tests.kt",
+    "*.spec.js",
+    "*.spec.ts",
+    "*.spec.jsx",
+    "*.spec.tsx",
+    "*.test.js",
+    "*.test.ts",
+    "*.test.jsx",
+    "*.test.tsx",
 })
 
 DEFAULT_TEST_DIRS: frozenset[str] = frozenset({
@@ -108,12 +116,15 @@ class DepPulseConfig:
     max_file_size_kb: int = 512  # skip files larger than this
     test_patterns: frozenset[str] = field(default_factory=lambda: DEFAULT_TEST_PATTERNS.copy())
     test_dirs: frozenset[str] = field(default_factory=lambda: DEFAULT_TEST_DIRS.copy())
+    hotspot_cache_path: Path = field(init=False)
+    risk_weights: "RiskWeights | None" = field(default=None, init=False)
 
     # Internally tracked
     _config_file: Optional[Path] = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
         self.cache_dir = self.project_root / ".deppulse"
+        self.hotspot_cache_path = self.project_root / ".deppulse" / "hotspot-cache.json"
 
     @classmethod
     def from_path(cls, project_root: Path) -> "DepPulseConfig":
@@ -157,6 +168,15 @@ class DepPulseConfig:
         test_dirs = data.get("test_dirs")
         if isinstance(test_dirs, list):
             instance.test_dirs = frozenset(test_dirs)
+
+        # Load risk weights from config
+        risk_weights = data.get("risk", {}).get("weights", {})
+        if risk_weights:
+            try:
+                from deppulse.core.risk import RiskWeights
+                instance.risk_weights = RiskWeights.from_dict(risk_weights)
+            except Exception:
+                pass
 
         return instance
 

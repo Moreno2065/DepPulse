@@ -25,8 +25,10 @@ from deppulse.models import (
 from deppulse.scanners.base import BaseScanner
 from deppulse.scanners.cpp_scanner import CppScanner
 from deppulse.scanners.java_scanner import JavaScanner
+from deppulse.scanners.javascript_scanner import JavaScriptScanner
 from deppulse.scanners.kotlin_scanner import KotlinScanner
 from deppulse.scanners.python_scanner import PythonScanner
+from deppulse.scanners.typescript_scanner import TypeScriptScanner
 
 
 # ---------------------------------------------------------------------------
@@ -38,6 +40,8 @@ _SCANNER_REGISTRY: list[BaseScanner] = [
     JavaScanner(),
     KotlinScanner(),
     CppScanner(),
+    JavaScriptScanner(),
+    TypeScriptScanner(),
 ]
 
 
@@ -340,6 +344,8 @@ class DependencyOrchestrator:
         java_count = lang_counts[Language.JAVA]
         kotlin_count = lang_counts[Language.KOTLIN]
         cpp_count = lang_counts[Language.CPP]
+        javascript_count = lang_counts[Language.JAVASCRIPT]
+        typescript_count = lang_counts[Language.TYPESCRIPT]
         unknown_count = lang_counts[Language.UNKNOWN]
 
         lang_breakdown = {
@@ -347,6 +353,8 @@ class DependencyOrchestrator:
             "java": java_count,
             "kotlin": kotlin_count,
             "cpp": cpp_count,
+            "javascript": javascript_count,
+            "typescript": typescript_count,
             "unknown": unknown_count,
         }
 
@@ -361,6 +369,8 @@ class DependencyOrchestrator:
             java_files=java_count,
             kotlin_files=kotlin_count,
             cpp_files=cpp_count,
+            javascript_files=javascript_count,
+            typescript_files=typescript_count,
             unknown_files=unknown_count,
             internal_edges=internal_edges,
             external_edges=external_edges,
