@@ -35,7 +35,7 @@ class BaseScanner(ABC):
         self,
         file_path: Path,
         project_root: Path,
-        file_index: Optional[dict[str, Path]] = None,
+        file_index: dict[str, Path] = {},
     ) -> "ScanResult":
         """
         Scan a single file and return a structured ScanResult.
@@ -63,7 +63,7 @@ class BaseScanner(ABC):
         raw_text: str,
         source_file: Path,
         project_root: Path,
-        file_index: Optional[dict[str, Path]] = None,
+        file_index: dict[str, Path] = {},
     ) -> "ResolvedDependency":
         """
         Resolve a raw dependency text to a project-relative path or classify

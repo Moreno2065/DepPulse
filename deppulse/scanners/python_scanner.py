@@ -10,6 +10,7 @@ from typing import Optional
 
 from deppulse.models import (
     DependencyKind,
+    DynamicImport,
     ExtractedSymbol,
     Language,
     RawDependency,
@@ -31,8 +32,6 @@ class PySymbolVisitor(ast.NodeVisitor):
         self.symbols: list[ExtractedSymbol] = []
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
-        if hasattr(ast, "AsyncFunctionDef") and isinstance(node, ast.AsyncFunctionDef):
-            return
         fully_qualified = f"function:{node.name}"
         self.symbols.append(
             ExtractedSymbol(
@@ -97,7 +96,7 @@ class PythonScanner(BaseScanner):
         self,
         file_path: Path,
         project_root: Path,
-        file_index: Optional[dict[str, Path]] = None,
+        file_index: dict[str, Path] = {},
     ) -> ScanResult:
         from deppulse.models import normalize_path_to_posix
 
@@ -166,6 +165,7 @@ class PythonScanner(BaseScanner):
             raw_dependencies=visitor2.raw_deps,
             resolved_dependencies=visitor2.resolved_deps,
             symbols=symbols,
+            dynamic_imports=visitor2.dynamic_imports,
             warnings=warnings,
         )
 
@@ -189,14 +189,13 @@ class PyImportVisitor(ast.NodeVisitor):
         self.rel_posix = rel_posix
         self.raw_deps: list[RawDependency] = []
         self.resolved_deps: list[ResolvedDependency] = []
+        self.dynamic_imports: list[DynamicImport] = []
 
     # ------------------------------------------------------------------
     # Import node visitors
     # ------------------------------------------------------------------
 
     def visit_Import(self, node: ast.Import) -> None:
-        for alias in node.lineno is not None and node.names or []:
-            pass
         for alias_node in node.names:
             raw_text = f"import {alias_node.name}" + (
                 f" as {alias_node.asname}" if alias_node.asname else ""
@@ -220,6 +219,45 @@ class PyImportVisitor(ast.NodeVisitor):
             raw_text = f"from {module_name} import {imported}"
             self._record_import(raw_text, module_name, node.lineno or 0, level=0)
         self.generic_visit(node)
+
+    def visit_Call(self, node: ast.Call) -> None:
+        """Detect dynamic imports via __import__() and importlib.import_module()."""
+        func = node.func
+        import_type: Optional[str] = None
+
+        if isinstance(func, ast.Name) and func.id == "__import__":
+            import_type = "__import__"
+        elif isinstance(func, ast.Attribute):
+            if isinstance(func.value, ast.Name) and func.value.id == "importlib":
+                if func.attr == "import_module":
+                    import_type = "importlib.import_module"
+
+        if import_type is not None:
+            line_no = node.lineno or 0
+            raw_text = ast.unparse(node) if hasattr(ast, "unparse") else self._call_to_text(node)
+            self.dynamic_imports.append(
+                DynamicImport(raw_text=raw_text, line_number=line_no, import_type=import_type)
+            )
+
+        self.generic_visit(node)
+
+    @staticmethod
+    def _call_to_text(node: ast.Call) -> str:
+        """Fallback to reconstruct call text when ast.unparse is unavailable."""
+        if isinstance(node.func, ast.Name):
+            args = ", ".join(
+                ast.unparse(a) if hasattr(ast, "unparse") else "..."
+                for a in node.args
+            )
+            return f"{node.func.id}({args})"
+        elif isinstance(node.func, ast.Attribute):
+            if isinstance(node.func.value, ast.Name):
+                args = ", ".join(
+                    ast.unparse(a) if hasattr(ast, "unparse") else "..."
+                    for a in node.args
+                )
+                return f"{node.func.value.id}.{node.func.attr}({args})"
+        return f"<dynamic import at line {node.lineno}>"
 
     # ------------------------------------------------------------------
     # Internal resolution
@@ -329,7 +367,7 @@ class PyImportVisitor(ast.NodeVisitor):
             candidate_rel = current / "/".join(parts)
 
         if self.file_index:
-            # Try exact path
+            # Try exact path in file_index first
             parts_posix = candidate_rel.relative_to(self.project_root)
             candidate_posix = "/".join(parts_posix.parts)
 
@@ -348,7 +386,21 @@ class PyImportVisitor(ast.NodeVisitor):
                         is_unresolved=False,
                     )
 
-            # No match found
+            # file_index miss: fall back to filesystem (handles files scanned but
+            # not yet indexed, or files that existed when this file was scanned)
+            for c in candidates:
+                abs_candidate = self.project_root / c.replace("/", os.sep)
+                if abs_candidate.exists():
+                    raw_dep = self._get_last_raw()
+                    return ResolvedDependency(
+                        raw=raw_dep,
+                        normalized_path=c,
+                        is_external=False,
+                        is_stdlib=False,
+                        is_unresolved=False,
+                    )
+
+            # No match found anywhere
             return self._unresolved_result(
                 module_name, f"relative import unresolved: {module_name} (level={level})"
             )

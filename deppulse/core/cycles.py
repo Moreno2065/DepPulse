@@ -126,12 +126,22 @@ def get_cycle_chains_for_file(
     graph: nx.DiGraph,
     file_path: str,
     max_chains: int = 10,
+    max_cycles_to_search: int = 10000,
 ) -> list[CycleInfo]:
     """
     Return all cycles that involve a specific file.
     Useful for per-file cycle reporting.
+
+    Enforces a hard cap on the number of raw cycles enumerated to guard
+    against exponential blow-up on dense graphs ( Johnson's algorithm
+    is O((V+E)(C+1)) where C is the number of elementary circuits).
     """
-    all_cycles = list(nx.simple_cycles(graph))
+    all_cycles: list[list[str]] = []
+    for cycle in nx.simple_cycles(graph):
+        all_cycles.append(cycle)
+        if len(all_cycles) >= max_cycles_to_search:
+            break
+
     file_cycles: list[CycleInfo] = []
 
     for cycle in all_cycles:

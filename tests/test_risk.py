@@ -42,8 +42,10 @@ class TestRiskScoring:
 
     def test_risk_score_contributions_sum(self, graph):
         risk = compute_risk_score(graph, ["main.py"], blast_radius_percent=50.0)
+        # Contributions are in 0-100 scale; sum equals the final score
         total = sum(c.contribution for c in risk.components)
-        assert 0 <= total <= 1.0
+        assert total == risk.score
+        assert 0 <= total <= 100
 
     def test_risk_levels(self, graph):
         """Verify risk level boundaries."""

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import fnmatch
 import json
 import os
+import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
@@ -109,6 +111,7 @@ class DepPulseConfig:
         try:
             data: dict[str, Any] = json.loads(config_file.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
+            warnings.warn(f"Failed to parse {config_file}, using defaults.")
             return instance
 
         risk = data.get("risk", {})
@@ -133,16 +136,14 @@ class DepPulseConfig:
         """Return True if a directory should be skipped during scanning."""
         if name in self.ignore_dirs:
             return True
-        for pattern in self.ignore_files:
-            if pattern.startswith("*") and name.endswith(pattern[1:]):
+        for pattern in self.ignore_dirs:
+            if fnmatch.fnmatch(name, pattern):
                 return True
         return False
 
     def should_ignore_file(self, name: str) -> bool:
         """Return True if a file should be skipped during scanning."""
-        if name in self.ignore_files:
-            return True
         for pattern in self.ignore_files:
-            if pattern.startswith("*") and name.endswith(pattern[1:]):
+            if fnmatch.fnmatch(name, pattern):
                 return True
         return False

@@ -84,6 +84,7 @@ class DependencyOrchestrator:
     def scan(
         self,
         project_root: Optional[Path] = None,
+        files_to_scan: Optional[set[str]] = None,
     ) -> GraphBuildResult:
         """
         Scan the project at `project_root` and build the dependency graph.
@@ -92,11 +93,9 @@ class DependencyOrchestrator:
         ----------
         project_root : Path, optional
             Root directory to scan. Defaults to the config's project_root.
-
-        Returns
-        -------
-        GraphBuildResult
-            Contains the networkx.DiGraph, scan results, and statistics.
+        files_to_scan : set[str], optional
+            If provided, only scan these project-relative POSIX paths.
+            Enables true incremental scanning where only changed files are processed.
         """
         start_time = time.monotonic()
         root = (project_root or self.config.project_root).resolve()
@@ -108,6 +107,11 @@ class DependencyOrchestrator:
 
         # Phase 1: walk the tree and build file index
         all_files, skipped = self._walk_project(root)
+
+        # When files_to_scan is provided (incremental mode), filter to only those files
+        if files_to_scan is not None:
+            all_files = [f for f in all_files if self._rel_posix(f, root) in files_to_scan]
+            skipped = 0  # filtered count not meaningful in incremental mode
 
         # Build the file index (POSIX path -> absolute Path)
         self._file_index = {}
@@ -200,7 +204,7 @@ class DependencyOrchestrator:
     def _is_ignored_dir(self, path: Path) -> bool:
         """Check if path matches any ignore pattern (for full paths, not just names)."""
         name = path.name
-        for pattern in self.config.ignore_files:
+        for pattern in self.config.ignore_dirs:
             if fnmatch.fnmatch(name, pattern):
                 return True
         return False
@@ -302,17 +306,18 @@ class DependencyOrchestrator:
                     raw_text=resolved.raw.raw_text,
                     kind=resolved.raw.kind,
                     line_number=resolved.raw.line_number,
-                    resolved_by=getattr(
-                        _get_scanner(Path(result.absolute_path)) or _get_scanner(Path(resolved.normalized_path or "")) or _SCANNER_REGISTRY[0],
-                        "name",
-                        "unknown",
-                    ),
+                    resolved_by=self._edge_resolved_by(result.absolute_path, resolved.normalized_path),
                 )
                 G.add_edge(
                     result.file_path,
                     resolved.normalized_path,
                     **vars(edge_meta),
                 )
+
+        # Populate files_in_cycles: find all nodes that participate in any cycle
+        for cycle in nx.simple_cycles(G):
+            for node in cycle:
+                files_in_cycles.add(node)
 
         return G, len(files_in_cycles)
 
@@ -327,18 +332,23 @@ class DependencyOrchestrator:
         files_with_cycles: int,
     ) -> GraphStats:
         """Compute summary statistics from the graph and scan results."""
-        lang_breakdown: dict[str, int] = {}
-        python_count = sum(1 for r in scan_results if r.language == Language.PYTHON)
-        java_count = sum(1 for r in scan_results if r.language == Language.JAVA)
-        kotlin_count = sum(1 for r in scan_results if r.language == Language.KOTLIN)
-        cpp_count = sum(1 for r in scan_results if r.language == Language.CPP)
-        unknown_count = sum(1 for r in scan_results if r.language == Language.UNKNOWN)
+        from collections import Counter
 
-        lang_breakdown["python"] = python_count
-        lang_breakdown["java"] = java_count
-        lang_breakdown["kotlin"] = kotlin_count
-        lang_breakdown["cpp"] = cpp_count
-        lang_breakdown["unknown"] = unknown_count
+        lang_counts = Counter(r.language for r in scan_results)
+
+        python_count = lang_counts[Language.PYTHON]
+        java_count = lang_counts[Language.JAVA]
+        kotlin_count = lang_counts[Language.KOTLIN]
+        cpp_count = lang_counts[Language.CPP]
+        unknown_count = lang_counts[Language.UNKNOWN]
+
+        lang_breakdown = {
+            "python": python_count,
+            "java": java_count,
+            "kotlin": kotlin_count,
+            "cpp": cpp_count,
+            "unknown": unknown_count,
+        }
 
         # All edges in the graph represent internal dependencies (from internal_dependencies)
         internal_edges = G.number_of_edges()
@@ -374,6 +384,16 @@ class DependencyOrchestrator:
         return str(rel).replace(os.sep, "/")
 
     @staticmethod
+    def _edge_resolved_by(source_path: str, dep_path: str) -> str:
+        """Return the scanner name that resolved a given edge, with fallback chain."""
+        scanner = (
+            _get_scanner(Path(source_path))
+            or _get_scanner(Path(dep_path or ""))
+            or _SCANNER_REGISTRY[0]
+        )
+        return getattr(scanner, "name", "unknown")
+
+    @staticmethod
     def _result_to_dict(result: ScanResult) -> dict:
         """Serialize ScanResult to a dict for caching."""
         return {
@@ -402,6 +422,10 @@ class DependencyOrchestrator:
                 }
                 for d in result.resolved_dependencies
             ],
+            "dynamic_imports": [
+                {"raw_text": d.raw_text, "line_number": d.line_number, "import_type": d.import_type}
+                for d in result.dynamic_imports
+            ],
         }
 
     @staticmethod
@@ -409,6 +433,7 @@ class DependencyOrchestrator:
         """Reconstruct ScanResult from cached dict."""
         from deppulse.models import (
             DependencyKind,
+            DynamicImport,
             ExtractedSymbol,
             Language,
             RawDependency,
@@ -450,6 +475,15 @@ class DependencyOrchestrator:
             for d in data.get("resolved_deps", [])
         ]
 
+        dynamic_imports = [
+            DynamicImport(
+                raw_text=d["raw_text"],
+                line_number=d["line_number"],
+                import_type=d.get("import_type", "unknown"),
+            )
+            for d in data.get("dynamic_imports", [])
+        ]
+
         return SR(
             file_path=file_path,
             absolute_path=absolute_path,
@@ -459,6 +493,7 @@ class DependencyOrchestrator:
             raw_dependencies=raw_deps,
             resolved_dependencies=resolved_deps,
             symbols=symbols,
+            dynamic_imports=dynamic_imports,
             warnings=data.get("warnings", []),
             error=data.get("error"),
         )

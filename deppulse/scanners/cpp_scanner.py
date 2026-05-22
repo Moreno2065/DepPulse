@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 from typing import Optional
@@ -43,6 +44,104 @@ def _strip_comments(text: str) -> str:
     return text
 
 
+def _find_comment_and_string_spans(text: str) -> list[tuple[int, int, str]]:
+    """
+    Return all (start, end, type) spans for comments and string literals in C++ source.
+    type is one of "line_comment", "block_comment", "single_string", "double_string", "raw_string".
+    Spans are non-overlapping and sorted.
+    """
+    spans: list[tuple[int, int, str]] = []
+
+    # Line comments: //
+    for m in _RE_SINGLELINE_COMMENT.finditer(text):
+        spans.append((m.start(), m.end(), "line_comment"))
+
+    # Block comments: /* */
+    for m in _RE_BLOCK_COMMENT.finditer(text):
+        spans.append((m.start(), m.end(), "block_comment"))
+
+    # Double-quoted strings (track escape sequences)
+    i = 0
+    n = len(text)
+    while i < n:
+        if text[i] == '"':
+            j = i + 1
+            while j < n:
+                if text[j] == '"':
+                    spans.append((i, j + 1, "double_string"))
+                    j += 1
+                    break
+                if text[j] == "\\" and j + 1 < n:
+                    j += 2
+                else:
+                    j += 1
+            i = j
+        else:
+            i += 1
+
+    # Single-quoted strings
+    i = 0
+    while i < n:
+        if text[i] == "'":
+            j = i + 1
+            while j < n and text[j] != "'":
+                if text[j] == "\\" and j + 1 < n:
+                    j += 2
+                else:
+                    j += 1
+            if j < n:
+                spans.append((i, j + 1, "single_string"))
+                j += 1
+            i = j
+        else:
+            i += 1
+
+    # Raw strings: R"delim(...)delim"
+    i = 0
+    while i < n:
+        if text[i] == "R" and i + 2 < n and text[i + 1] == '"':
+            j = i + 2
+            delim_start = ""
+            while j < n and text[j] != "(":
+                delim_start += text[j]
+                j += 1
+            if j < n and text[j] == "(":
+                close = f')"{delim_start}"'
+                close_pos = text.find(close, j)
+                if close_pos >= 0:
+                    spans.append((i, close_pos + len(close), "raw_string"))
+                    i = close_pos + len(close)
+                    continue
+        i += 1
+
+    # Sort and merge overlapping spans (prefer comments over strings)
+    spans.sort(key=lambda s: s[0])
+    merged: list[tuple[int, int, str]] = []
+    for start, end, stype in spans:
+        if merged and start <= merged[-1][1]:
+            # Overlap: keep the one that is a comment (comment takes precedence)
+            if "comment" not in stype and "comment" in merged[-1][2]:
+                continue  # discard string span that overlaps a comment
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end), merged[-1][2])
+        else:
+            merged.append((start, end, stype))
+    return merged
+
+
+def _is_in_span(pos: int, spans: list[tuple[int, int, str]]) -> bool:
+    import bisect
+
+    class SpanSentinel:
+        def __init__(self, idx: int): self.idx = idx
+        def __lt__(self, other: tuple[int, int, str]) -> bool: return self.idx < other[0]
+
+    i = bisect.bisect_right(spans, SpanSentinel(pos)) - 1
+    if i >= 0:
+        s, e, _ = spans[i]
+        return s <= pos < e
+    return False
+
+
 class CppScanner(BaseScanner):
     """
     Scanner for C/C++ source files using regex-based include directive extraction.
@@ -67,7 +166,7 @@ class CppScanner(BaseScanner):
         self,
         file_path: Path,
         project_root: Path,
-        file_index: Optional[dict[str, Path]] = None,
+        file_index: dict[str, Path] = {},
     ) -> ScanResult:
         from deppulse.models import normalize_path_to_posix
 
@@ -88,19 +187,25 @@ class CppScanner(BaseScanner):
                 error=f"OS error reading file: {e}",
             )
 
-        # Strip comments before scanning
-        content = _strip_comments(raw_content)
+        # Build sorted span list from original content (for binary-search filtering)
+        all_spans = _find_comment_and_string_spans(raw_content)
 
         raw_deps: list[RawDependency] = []
         resolved_deps: list[ResolvedDependency] = []
         warnings: list[str] = []
 
-        for match in _RE_INCLUDE.finditer(content):
-            # group(1) is e.g. '"types.h"' or '<stddef.h>'
-            raw_text = "#include " + match.group(1)
+        for match in _RE_INCLUDE.finditer(raw_content):
+            match_start = match.start()
+            match_end = match.end()
+
+            # Skip if the # is inside a comment or the filename is inside a string
+            if _is_in_span(match_start, all_spans):
+                continue
+
+            raw_text = match.group(0).strip()
             is_quoted = match.group(1)[0] == '"'
             include_text = match.group(1)[1:-1].strip()
-            line_number = raw_content[: match.start()].count("\n") + 1
+            line_number = raw_content[:match_start].count("\n") + 1
 
             kind = DependencyKind.INCLUDE_LOCAL if is_quoted else DependencyKind.INCLUDE_SYSTEM
             raw_dep = RawDependency(
@@ -240,6 +345,3 @@ class CppScanner(BaseScanner):
             is_unresolved=True,
             resolution_note=f"multiple matches: {', '.join(matches)}",
         )
-
-
-import os

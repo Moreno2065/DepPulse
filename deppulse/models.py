@@ -97,6 +97,18 @@ class ResolvedDependency:
 
 
 @dataclass
+class DynamicImport:
+    """
+    A dynamic import detected via a call expression (e.g. __import__(...),
+    importlib.import_module(...)) that AST cannot resolve to a file path.
+    """
+
+    raw_text: str       # e.g. "__import__(os.environ['MOD'])"
+    line_number: int
+    import_type: str    # e.g. "__import__", "importlib.import_module"
+
+
+@dataclass
 class ExtractedSymbol:
     """A Python symbol (function, class, method) extracted from a module."""
 
@@ -122,6 +134,7 @@ class ScanResult:
     raw_dependencies: list[RawDependency] = field(default_factory=list)
     resolved_dependencies: list[ResolvedDependency] = field(default_factory=list)
     symbols: list[ExtractedSymbol] = field(default_factory=list)
+    dynamic_imports: list[DynamicImport] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     error: Optional[str] = None  # non-empty if scan failed catastrophically
     is_script: bool = False       # True for Kotlin .kts script files
@@ -225,6 +238,7 @@ class PerFileImpact:
     impact_chains: list[ImpactChain]
     total_affected: int
     blast_radius_percent: float
+    connected_component_size: int = 0  # size of the weakly-connected component containing this file
 
 
 @dataclass
@@ -241,6 +255,7 @@ class ImpactReport:
     blast_radius_percent: float
     risk_score: float
     risk_level: RiskLevel
+    connected_component_size: int = 0  # size of the largest weakly-connected component among mutated files
 
 
 # ---------------------------------------------------------------------------
@@ -433,7 +448,7 @@ def normalize_path_to_posix(path: str, project_root: str) -> str:
         rel = path
 
     # Convert to POSIX (forward slashes)
-    parts = PureWindowsPath(rel).parts if ":" in rel else PurePosixPath(rel).parts
+    parts = PureWindowsPath(rel).parts if os.name == "nt" else PurePosixPath(rel).parts
     return str(PurePosixPath(*parts))
 
 

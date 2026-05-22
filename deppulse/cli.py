@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import time
 from pathlib import Path
 from typing import Optional
@@ -41,6 +42,11 @@ def _build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--version", action="version", version=f"deppulse {__version__}")
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Print full traceback on error",
+    )
     parser.add_argument(
         "--no-cache",
         action="store_true",
@@ -229,21 +235,27 @@ def _run_scan(
     project_path: Path,
     config: DepPulseConfig,
     use_cache: bool,
+    files_to_scan: Optional[set[str]] = None,
 ) -> tuple[GraphBuildResult, nx.DiGraph, float]:
     """Run the orchestrator scan and return results with timing."""
     orchestrator = DependencyOrchestrator(config=config, use_cache=use_cache)
     start = time.monotonic()
-    result = orchestrator.scan(project_path)
+    result = orchestrator.scan(project_path, files_to_scan=files_to_scan)
     elapsed = time.monotonic() - start
 
-    # Build the graph from scan results
     G = _build_graph_from_results(result)
     return result, G, elapsed
 
 
 def _build_graph_from_results(result: GraphBuildResult) -> nx.DiGraph:
-    """Rebuild the networkx graph from a GraphBuildResult."""
+    """Rebuild the networkx graph from a GraphBuildResult using the orchestrator."""
+    # Use the orchestrator's authoritative builder; reuse the same logic path.
+    # Build a minimal scan_results list so the orchestrator path is shared.
+    from deppulse.core.orchestrator import DependencyOrchestrator
+
+    project_root = Path(result.project_root)
     G = nx.DiGraph()
+
     for scan_result in result.scan_results:
         from deppulse.models import NodeMetadata
         if scan_result.error and not scan_result.resolved_dependencies:
@@ -275,12 +287,16 @@ def _build_graph_from_results(result: GraphBuildResult) -> nx.DiGraph:
                     external_count=0,
                 )
                 G.add_node(resolved.normalized_path, **vars(ghost))
+            resolved_by = DependencyOrchestrator._edge_resolved_by(
+                scan_result.absolute_path, resolved.normalized_path
+            )
             G.add_edge(
                 scan_result.file_path,
                 resolved.normalized_path,
                 raw_text=resolved.raw.raw_text,
                 kind=resolved.raw.kind.value,
                 line_number=resolved.raw.line_number,
+                resolved_by=resolved_by,
             )
     return G
 
@@ -298,18 +314,18 @@ def _cmd_scan(args: argparse.Namespace) -> int:
         ui.set_ci_mode(True)
 
     # Incremental / --since mode
+    files_to_scan: Optional[set[str]] = None
     if args.incremental or args.since:
         project_path = args.path.resolve()
         if not is_git_repo(project_path):
             ui.console.print("[yellow]Not a git repository. Use 'deppulse scan' without --incremental.[/yellow]")
             return 1
 
-        # Build list of files to scan
-        import subprocess
         git_cmd = ["git", "-C", str(project_path), "diff", "--name-only", "HEAD"]
         if args.since:
             git_cmd = ["git", "-C", str(project_path), "diff", "--name-only", args.since, "HEAD"]
         try:
+            import subprocess
             changed_raw = subprocess.check_output(git_cmd, text=True, timeout=30)
             changed_files = [f.strip() for f in changed_raw.strip().split("\n") if f.strip()]
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
@@ -318,14 +334,12 @@ def _cmd_scan(args: argparse.Namespace) -> int:
 
         if changed_files:
             ui.console.print(f"[dim]Incremental scan: {len(changed_files)} changed file(s)[/dim]")
+            files_to_scan = set(changed_files)
         else:
             ui.console.print("[dim]No changed files found. Use full scan for initial analysis.[/dim]")
+            files_to_scan = None
 
-        # For now, fall back to full scan but pass the changed files list
-        # The orchestrator can be extended to accept a file filter list
-        result, G, elapsed = _run_scan(args.path, config, use_cache=not args.no_cache)
-    else:
-        result, G, elapsed = _run_scan(args.path, config, use_cache=not args.no_cache)
+    result, G, elapsed = _run_scan(args.path, config, use_cache=not args.no_cache, files_to_scan=files_to_scan)
 
     # Write SARIF first so it's produced regardless of other output flags
     if args.sarif_output:
@@ -363,13 +377,24 @@ def _cmd_trace(args: argparse.Namespace) -> int:
     result, G, elapsed = _run_scan(args.path, config, use_cache=not args.no_cache)
 
     mutated_files = args.mutated_file
-    # Normalize paths
+    # Normalize paths to project-relative POSIX format (must match graph node keys)
+    from deppulse.models import normalize_path_to_posix
+    project_path_str = str(args.path.resolve())
     normalized = []
     for f in mutated_files:
         f_str = str(f).replace("\\", "/")
-        if f_str.startswith(str(args.path)):
-            from deppulse.models import normalize_path_to_posix
-            f_str = normalize_path_to_posix(f_str, str(args.path))
+        # If absolute path, convert to project-relative
+        if os.path.isabs(f_str):
+            f_str = normalize_path_to_posix(f_str, project_path_str)
+        # If relative path, resolve against cwd and then make project-relative
+        elif not f_str.startswith("/") and not (len(f_str) > 1 and f_str[1] == ":"):
+            # Try resolving against the actual project directory
+            candidate = (args.path / f_str).resolve()
+            if candidate.exists():
+                f_str = normalize_path_to_posix(str(candidate), project_path_str)
+            else:
+                # Assume it's already project-relative (e.g. "deppulse/cli.py")
+                pass
         normalized.append(f_str)
 
     # Filter to files in the graph
@@ -648,11 +673,20 @@ def _cmd_viz(args: argparse.Namespace) -> int:
             return 1
 
         if args.depth > 0:
-            # BFS to depth
-            import networkx as nx
-            ancestors = nx.descendants(G, focus_node)
-            descendants = nx.descendants(G.reverse(copy=False), focus_node)
-            nodes_to_keep = ancestors | descendants | {focus_node}
+            # BFS with depth limit: collect all nodes within args.depth hops
+            nodes_to_keep: set[str] = {focus_node}
+            current_frontier: set[str] = {focus_node}
+
+            for _ in range(args.depth):
+                next_frontier: set[str] = set()
+                for node in current_frontier:
+                    # Descendants: files this node depends on (out-edges)
+                    next_frontier.update(G.successors(node))
+                    # Ancestors: files that depend on this node (in-edges)
+                    next_frontier.update(G.predecessors(node))
+                nodes_to_keep.update(next_frontier)
+                current_frontier = next_frontier
+
             nodes_to_remove = set(G.nodes()) - nodes_to_keep
             G.remove_nodes_from(nodes_to_remove)
 
@@ -782,7 +816,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         return 130
     except Exception as e:
         ui.console.print(f"[red]Error: {e}[/red]")
-        if "--debug" in (argv or []):
+        if args.debug:
             import traceback
             traceback.print_exc()
         return 1

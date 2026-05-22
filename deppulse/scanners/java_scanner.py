@@ -31,7 +31,7 @@ def _is_external(module: str) -> bool:
     return module.startswith(prefixes)
 
 
-def _resolve_import_to_path(module: str, file_index: Optional[dict[str, Path]]) -> Optional[str]:
+def _resolve_import_to_path(module: str, file_index: dict[str, Path]) -> Optional[str]:
     """
     Convert a fully-qualified Java module name to a project-relative path.
 
@@ -71,7 +71,7 @@ class JavaScanner(BaseScanner):
         self,
         file_path: Path,
         project_root: Path,
-        file_index: Optional[dict[str, Path]] = None,
+        file_index: dict[str, Path] = {},
     ) -> ScanResult:
         from deppulse.models import normalize_path_to_posix
 
@@ -221,12 +221,12 @@ class JavaScanner(BaseScanner):
         module: str,
         is_static: bool,
         is_wildcard: bool,
-        file_index: Optional[dict[str, Path]],
         raw_dep: RawDependency,
+        file_index: dict[str, Path] = {},
     ) -> ResolvedDependency:
         """Resolve a Java import to a project file or classify as external/stdlib."""
         # 1. Try to resolve to a project file first
-        if file_index is not None:
+        if file_index:
             resolved_path = _resolve_import_to_path(module, file_index)
             if resolved_path is not None:
                 return ResolvedDependency(

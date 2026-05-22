@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import os
-from pathlib import Path
 from typing import Optional
 
 import networkx as nx
@@ -37,6 +35,7 @@ class ImpactAnalyzer:
         self,
         mutated_file: str,
         max_chains: int = 50,
+        cc_size_cache: Optional[dict[str, int]] = None,
     ) -> PerFileImpact:
         """
         Compute the impact of changing a single file.
@@ -44,20 +43,17 @@ class ImpactAnalyzer:
         Returns a PerFileImpact describing affected upstream dependents
         and blast radius.
         """
-        # Normalize path
         normalized = self._normalize_path(mutated_file)
         if normalized not in self.graph:
             return self._empty_impact(mutated_file)
 
-        # Find all ancestors (files that depend on this file, directly or transitively)
-        # Since edges point: source -> dependency, we want predecessors
         all_affected: set[str] = set()
         directly_affected: set[str] = set()
 
-        # Use BFS on reversed graph
+        cc_size = (cc_size_cache or {}).get(normalized) or self._connected_component_size(normalized)
+
         queue = list(self.graph.predecessors(normalized))
         visited: set[str] = {normalized}
-        depth_map: dict[str, int] = {normalized: 0}
 
         while queue:
             node = queue.pop(0)
@@ -65,34 +61,20 @@ class ImpactAnalyzer:
                 continue
             visited.add(node)
             all_affected.add(node)
-            depth_map[node] = depth_map.get(node, 0)
 
-            # Determine direct vs indirect
-            # A file is directly affected if it has an edge FROM the mutated file
-            # or if it depends directly on the mutated file
-            preds = self.graph.predecessors(node)
-            if any(p == normalized or p in directly_affected for p in self.graph.predecessors(node)):
+            if self.graph.has_edge(node, normalized):
                 directly_affected.add(node)
 
             for pred in self.graph.predecessors(node):
                 if pred not in visited:
                     queue.append(pred)
 
-        # Recalculate: a file is directly affected if it has a direct edge from mutated
-        directly_affected = set()
-        for affected in all_affected:
-            # Check if there's a direct edge from affected -> mutated
-            if self.graph.has_edge(affected, normalized):
-                directly_affected.add(affected)
-
         all_affected_list = sorted(all_affected)
         directly_affected_list = sorted(directly_affected)
 
-        # Compute impact chains (paths from affected files to mutated file)
         chains = self._compute_impact_chains(all_affected_list, normalized, max_chains)
 
-        total = self.graph.number_of_nodes()
-        blast_radius = (len(all_affected) / total * 100) if total > 0 else 0.0
+        blast_radius = (len(all_affected) / cc_size * 100) if cc_size > 0 else 0.0
 
         return PerFileImpact(
             mutated_file=normalized,
@@ -101,6 +83,7 @@ class ImpactAnalyzer:
             impact_chains=chains,
             total_affected=len(all_affected),
             blast_radius_percent=blast_radius,
+            connected_component_size=cc_size,
         )
 
     # ------------------------------------------------------------------
@@ -115,39 +98,53 @@ class ImpactAnalyzer:
         """
         Compute combined impact for multiple changed files.
         """
+        # Precompute connected component sizes once for all mutated files
+        cc_size_cache: dict[str, int] = {}
+        if self.graph.number_of_nodes() > 0:
+            for cc in nx.weakly_connected_components(self.graph):
+                cc_size = len(cc)
+                for node in cc:
+                    cc_size_cache[node] = cc_size
+
         per_file: list[PerFileImpact] = []
         all_affected: set[str] = set()
+        cc_size = self.graph.number_of_nodes()
 
         for f in mutated_files:
-            pfi = self.analyze_file(f, max_chains=max_chains)
+            pfi = self.analyze_file(f, max_chains=max_chains, cc_size_cache=cc_size_cache)
             per_file.append(pfi)
             all_affected.update(pfi.affected_files)
-            all_affected.update([f])  # include the mutated file itself
+            all_affected.update([f])
+            cc_size = max(cc_size, pfi.connected_component_size)
 
-        total = self.graph.number_of_nodes()
-        blast_radius = (len(all_affected) / total * 100) if total > 0 else 0.0
+        blast_radius = (len(all_affected) / cc_size * 100) if cc_size > 0 else 0.0
 
-        # Compute a simple risk level based on blast radius
-        if blast_radius >= 50:
-            risk_level = RiskLevel.HIGH
-            risk_score = min(100.0, blast_radius * 1.5)
-        elif blast_radius >= 20:
-            risk_level = RiskLevel.MEDIUM
-            risk_score = blast_radius * 1.2
-        else:
-            risk_level = RiskLevel.LOW
-            risk_score = blast_radius * 0.8
-
+        # Risk level and score are computed by compute_risk_score() in the caller,
+        # not here — avoid duplicating the logic in the model layer.
         return ImpactReport(
             mutated_files=[self._normalize_path(f) for f in mutated_files],
             all_affected_files=sorted(all_affected),
             per_file_impact=per_file,
             combined_affected_count=len(all_affected),
-            total_files_in_project=total,
+            total_files_in_project=self.graph.number_of_nodes(),
             blast_radius_percent=blast_radius,
-            risk_score=risk_score,
-            risk_level=risk_level,
+            risk_score=0.0,
+            risk_level=RiskLevel.LOW,
+            connected_component_size=cc_size,
         )
+
+    # ------------------------------------------------------------------
+    # Connected component
+    # ------------------------------------------------------------------
+
+    def _connected_component_size(self, node: str) -> int:
+        """Return the size of the weakly-connected component containing `node`."""
+        if node not in self.graph or self.graph.number_of_nodes() == 0:
+            return 0
+        for cc in nx.weakly_connected_components(self.graph):
+            if node in cc:
+                return len(cc)
+        return 0
 
     # ------------------------------------------------------------------
     # Impact chains

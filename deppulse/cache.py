@@ -120,6 +120,16 @@ class ScanCache:
         if current_mtime != entry.mtime_ns or current_size != entry.size_bytes:
             return None
 
+        # Content hash as a secondary check: if mtime/size match but the file
+        # was modified beyond the first 64 KB, hash the full file to be sure.
+        if entry.content_hash:
+            try:
+                actual_hash = hashlib.sha1(abs_path.read_bytes()).hexdigest()
+                if actual_hash != entry.content_hash:
+                    return None
+            except OSError:
+                return None
+
         return entry.result
 
     def set(
@@ -136,11 +146,10 @@ class ScanCache:
         except OSError:
             return
 
-        # Compute content hash for extra safety
+        # Compute full-content hash (not truncated) to avoid false positives
+        # when a large file is modified beyond the first 64 KB.
         try:
-            content_bytes = abs_path.read_bytes()
-            # Only hash first 64KB to avoid slow I/O on large files
-            content_hash = hashlib.sha1(content_bytes[:65536]).hexdigest()
+            content_hash = hashlib.sha1(abs_path.read_bytes()).hexdigest()
         except OSError:
             content_hash = ""
 

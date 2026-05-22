@@ -46,14 +46,12 @@ def _is_external(module: str) -> bool:
     return module.startswith(prefixes)
 
 
-def _resolve_import_to_path(module: str, file_index: Optional[dict[str, Path]]) -> Optional[str]:
+def _resolve_import_to_path(module: str, file_index: dict[str, Path]) -> Optional[str]:
     """
     Convert a fully-qualified Kotlin module name to a project-relative path.
 
     e.g. com.example.utils -> com/example/utils.kt or com/example/utils/__init__.kt
     """
-    if file_index is None:
-        return None
     path_with_slash = module.replace(".", "/")
     candidates = [
         path_with_slash + ".kt",
@@ -191,7 +189,7 @@ class KotlinScanner(BaseScanner):
         self,
         file_path: Path,
         project_root: Path,
-        file_index: Optional[dict[str, Path]] = None,
+        file_index: dict[str, Path] = {},
     ) -> ScanResult:
         from deppulse.models import normalize_path_to_posix
 
@@ -257,12 +255,12 @@ class KotlinScanner(BaseScanner):
     def _resolve_import(
         self,
         module: str,
-        file_index: Optional[dict[str, Path]],
+        file_index: dict[str, Path],
         raw_dep: RawDependency,
     ) -> ResolvedDependency:
         """Resolve a Kotlin import to a project file or classify as external/stdlib."""
         # Try to resolve to a project file first
-        if file_index is not None:
+        if file_index:
             resolved_path = _resolve_import_to_path(module, file_index)
             if resolved_path is not None:
                 return ResolvedDependency(

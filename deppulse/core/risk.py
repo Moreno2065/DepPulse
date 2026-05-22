@@ -44,10 +44,10 @@ def compute_risk_score(
     """
     components: list[RiskComponent] = []
 
-    # --- 1. Blast radius component (weight: 0.50) ---
+    # Blast radius component (weight: 50 out of 100)
     raw_blast = blast_radius_percent
     norm_blast = min(raw_blast / 100.0, 1.0)
-    blast_contrib = 0.50 * norm_blast
+    blast_contrib = 50.0 * norm_blast
     components.append(RiskComponent(
         name="blast_radius_percent",
         weight=0.50,
@@ -56,18 +56,18 @@ def compute_risk_score(
         contribution=blast_contrib,
         explanation=(
             f"{raw_blast:.1f}% of project files are affected. "
-            f"This component contributes {blast_contrib:.2f} to the score."
+            f"This component contributes {blast_contrib:.1f} to the score."
         ),
     ))
 
-    # --- 2. Dependent ratio component (weight: 0.20) ---
+    # Dependent ratio component (weight: 20 out of 100)
     in_degrees = [graph.in_degree(f) for f in involved_files]
     out_degrees = [graph.out_degree(f) for f in involved_files]
     avg_in = sum(in_degrees) / max(len(in_degrees), 1)
     avg_out = sum(out_degrees) / max(len(out_degrees), 1)
     total_deps = avg_in + avg_out
     dependent_ratio = (avg_in / total_deps) if total_deps > 0 else 0.0
-    dependent_contrib = 0.20 * dependent_ratio
+    dependent_contrib = 20.0 * dependent_ratio
     components.append(RiskComponent(
         name="dependent_ratio",
         weight=0.20,
@@ -78,11 +78,11 @@ def compute_risk_score(
             f"Files have avg in-degree={avg_in:.1f} (dependents) and "
             f"out-degree={avg_out:.1f} (dependencies). "
             f"Ratio={dependent_ratio:.2f}. "
-            f"Contributes {dependent_contrib:.2f}."
+            f"Contributes {dependent_contrib:.1f}."
         ),
     ))
 
-    # --- 3. Centrality component (weight: 0.15) ---
+    # Centrality component (weight: 15 out of 100)
     centrality_scores: list[float] = []
     if graph.number_of_nodes() > 1:
         try:
@@ -91,7 +91,7 @@ def compute_risk_score(
         except Exception:
             centrality_scores = []
     avg_centrality = sum(centrality_scores) / max(len(centrality_scores), 1) if centrality_scores else 0.0
-    centrality_contrib = 0.15 * avg_centrality
+    centrality_contrib = 15.0 * avg_centrality
     components.append(RiskComponent(
         name="centrality_score",
         weight=0.15,
@@ -105,13 +105,13 @@ def compute_risk_score(
         ),
     ))
 
-    # --- 4. Core path component (weight: 0.10) ---
+    # Core path component (weight: 10 out of 100)
     core_count = sum(
         1 for f in involved_files
         if _is_core_path(f)
     )
     core_score = core_count / max(len(involved_files), 1)
-    core_contrib = 0.10 * core_score
+    core_contrib = 10.0 * core_score
     components.append(RiskComponent(
         name="core_path_score",
         weight=0.10,
@@ -121,16 +121,15 @@ def compute_risk_score(
         explanation=(
             f"{core_count}/{len(involved_files)} files are in core-like directories "
             f"(core/, base/, lib/, common/, etc.). "
-            f"Contributes {core_contrib:.2f}."
+            f"Contributes {core_contrib:.1f}."
         ),
     ))
 
-    # --- 5. Cycle penalty component (weight: 0.05) ---
+    # Cycle penalty component (weight: 5 out of 100)
     cycle_score = 0.0
     if cycle_count > 0 or cycle_files > 0:
-        # Penalty increases with cycle severity
         cycle_score = min(1.0, (cycle_count / 10.0) * 0.5 + (cycle_files / max(graph.number_of_nodes(), 1)) * 0.5)
-    cycle_contrib = 0.05 * cycle_score
+    cycle_contrib = 5.0 * cycle_score
     components.append(RiskComponent(
         name="cycle_penalty",
         weight=0.05,
@@ -139,12 +138,12 @@ def compute_risk_score(
         contribution=cycle_contrib,
         explanation=(
             f"{cycle_count} cycles detected, {cycle_files} files in cycles. "
-            f"Contributes {cycle_contrib:.2f}."
+            f"Contributes {cycle_contrib:.1f}."
         ),
     ))
 
-    # --- Compute final score ---
-    score = sum(c.contribution * 100 for c in components)
+    # Final score: contributions are already in 0-100 scale, sum directly
+    score = sum(c.contribution for c in components)
 
     # --- Determine risk level ---
     if score >= 70:

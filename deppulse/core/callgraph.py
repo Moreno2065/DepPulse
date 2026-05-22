@@ -162,32 +162,27 @@ def _resolve_python_calls(
 
     for call_name in visitor.calls:
         # Try local first, then project-wide
-        candidates: list[Symbol] = []
         if call_name in local_names:
-            # Local recursion or call to local function
             local_syms = [s for s in symbol_index.get(scan_result.file_path, []) if s.name == call_name]
-            candidates.extend(local_syms)
-
-        if not candidates and call_name in name_to_symbols:
-            candidates.extend(name_to_symbols[call_name])
-
-        # Create edges (best-effort — pick first candidate or mark external)
-        if candidates:
-            for callee in candidates:
+            for callee in local_syms:
                 edges.append(
                     SymbolCall(
-                        caller=Symbol(
-                            file_path=scan_result.file_path,
-                            name=call_name,
-                            fully_qualified=f"function:{call_name}",
-                            symbol_type=SymbolType.UNKNOWN,
-                            language=Language.PYTHON,
-                            line_number=0,
-                        ),
+                        caller=callee,
                         callee=callee,
                         call_site=(scan_result.file_path, 0),
                         is_polymorphic=False,
                         is_external=False,
+                    )
+                )
+        elif call_name in name_to_symbols:
+            for callee in name_to_symbols[call_name]:
+                edges.append(
+                    SymbolCall(
+                        caller=callee,
+                        callee=callee,
+                        call_site=(scan_result.file_path, 0),
+                        is_polymorphic=False,
+                        is_external=callee.file_path != scan_result.file_path,
                     )
                 )
 
@@ -253,11 +248,11 @@ def _resolve_java_calls(
                         fully_qualified=f"method:{receiver}.{method_name}",
                         symbol_type=SymbolType.UNKNOWN,
                         language=Language.JAVA,
-                        line_number=0,
+                        line_number=line_number,
                     ),
                     callee=callee,
                     call_site=(scan_result.file_path, line_number),
-                    is_polymorphic=True,  # Java methods are virtual by default
+                    is_polymorphic=True,
                     is_external=callee.file_path != scan_result.file_path,
                 )
             )
