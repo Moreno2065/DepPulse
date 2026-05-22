@@ -117,7 +117,8 @@ class SnapshotManager:
         Parameters
         ----------
         graph_result : GraphBuildResult
-            The result of a full project scan.
+            The result of a full project scan. Contains scan_results and,
+            after v1.1, a unified_ir built from those results.
         tag : str, optional
             A human-readable tag (e.g. "v0.2.0"). If not provided,
             the commit hash is used.
@@ -140,15 +141,19 @@ class SnapshotManager:
         for sr in graph_result.scan_results:
             scan_by_path[sr.file_path] = sr
 
-        # Build a simple graph from scan results for degree computation
-        graph = nx.DiGraph()
-        for sr in graph_result.scan_results:
-            if sr.file_path not in graph:
-                graph.add_node(sr.file_path)
-            for dep in sr.internal_dependencies:
-                if dep.normalized_path:
-                    graph.add_node(dep.normalized_path)
-                    graph.add_edge(sr.file_path, dep.normalized_path)
+        # Derive the graph from UnifiedIR when available (v1.1+),
+        # falling back to a scan-result-based graph for older snapshots.
+        if graph_result.unified_ir is not None:
+            graph = graph_result.unified_ir.to_dependency_graph()
+        else:
+            graph = nx.DiGraph()
+            for sr in graph_result.scan_results:
+                if sr.file_path not in graph:
+                    graph.add_node(sr.file_path)
+                for dep in sr.internal_dependencies:
+                    if dep.normalized_path:
+                        graph.add_node(dep.normalized_path)
+                        graph.add_edge(sr.file_path, dep.normalized_path)
 
         # Compute betweenness centrality
         centrality_scores: dict[str, float] = {}
@@ -182,8 +187,9 @@ class SnapshotManager:
             for c in cycle_report.cycles:
                 cycles_json.append({"nodes": c.nodes, "length": c.length})
 
-        snapshot_data = {
-            "schema_version": "2.0",
+        # Build snapshot data; include IR structure when available (v1.1+)
+        snapshot_data: dict = {
+            "schema_version": "2.1",
             "tag": tag,
             "commit_hash": commit_hash,
             "commit_message": commit_msg,
@@ -199,6 +205,37 @@ class SnapshotManager:
             },
             "cycles": cycles_json,
         }
+
+        # Include full IR nodes + edges when available
+        if graph_result.unified_ir is not None:
+            ir = graph_result.unified_ir
+            ir.build_indices()  # ensure indices are populated
+            snapshot_data["ir"] = {
+                "files": [
+                    {
+                        "path": fn.path,
+                        "language": fn.language,
+                        "suffix": fn.suffix,
+                        "symbol_count": len(fn.symbols),
+                        "error": fn.error,
+                    }
+                    for fn in ir.file_nodes
+                ],
+                "edges": [
+                    {
+                        "from": e.from_file,
+                        "to": e.to_file,
+                        "specifier": e.specifier,
+                        "kind": e.import_kind.value,
+                        "line": e.line,
+                        "is_external": e.is_external,
+                        "is_stdlib": e.is_stdlib,
+                        "is_unresolved": e.is_unresolved,
+                    }
+                    for e in ir.import_edges
+                ],
+                "sym_count": len(ir.sym_defs),
+            }
 
         # Save to file
         self._snapshots_dir.mkdir(parents=True, exist_ok=True)
@@ -292,7 +329,9 @@ class SnapshotManager:
         data = json.loads(file_path.read_text(encoding="utf-8"))
 
         # Handle both v1.0 (version="1.0") and v2.0 (schema_version="2.0")
-        schema_version = data.get("schema_version") or data.get("version", "1.0")
+        # schema_version is read for backward-compat awareness; content is
+        # handled uniformly since all versions share the same field layout.
+        data.get("schema_version") or data.get("version", "1.0")
 
         file_metrics: dict[str, FileMetrics] = {}
         for path_str, m_dict in data.get("file_metrics", {}).items():

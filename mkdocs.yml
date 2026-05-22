@@ -1,0 +1,62 @@
+site_name: DepPulse
+site_description: Local source-code dependency topology and change-impact auditing CLI tool
+site_author: DepPulse Authors
+site_url: https://deppulse.readthedocs.io
+
+repo_name: deppulse/deppulse
+repo_url: https://github.com/deppulse/deppulse
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+
+plugins:
+  - search
+  - mkdocstrings:
+      default_handler: python
+      handlers:
+        python:
+          options:
+            show_source: true
+            show_root_heading: true
+            heading_level: 2
+
+nav:
+  - Home: index.md
+  - Installation: installation.md
+  - Quick Start: quickstart.md
+  - CLI Reference: cli.md
+  - Configuration: configuration.md
+  - Architecture:
+      - Overview: architecture/overview.md
+      - Scanners: architecture/scanners.md
+      - Unified IR: architecture/ir.md
+      - Risk Model: architecture/risk.md
+      - Test Selection: architecture/test-selection.md
+  - API Reference:
+      - deppulse: api/deppulse.md
+      - deppulse.core: api/core.md
+      - deppulse.scanners: api/scanners.md
+      - deppulse.models: api/models.md
+  - Changelog: changelog.md

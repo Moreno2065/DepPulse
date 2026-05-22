@@ -18,11 +18,12 @@ snapshot) continue to receive GraphBuildResult without changes.
 
 from __future__ import annotations
 
-import networkx as nx
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
+
+import networkx as nx
 
 if TYPE_CHECKING:
     from deppulse.models import DependencyKind, ScanResult
@@ -165,7 +166,7 @@ class FileNode:
     symbols: list[RawSymbol] = field(default_factory=list)
     size_bytes: int = 0
     warnings: list[str] = field(default_factory=list)
-    error: Optional[str] = None
+    error: str | None = None
 
     @property
     def symbol_names(self) -> set[str]:
@@ -190,7 +191,7 @@ class SymDef:
     language: str = "unknown"
 
     # For methods: name of the containing class/type
-    owner: Optional[str] = None
+    owner: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -206,7 +207,7 @@ class ImportEdge:
     """
 
     from_file: str            # project-relative POSIX path of the importing file
-    to_file: Optional[str]    # project-relative POSIX path of the imported file (None if external/stdlib)
+    to_file: str | None    # project-relative POSIX path of the imported file (None if external/stdlib)
     specifier: str            # e.g. "com.example.Utils" or "utils/helper.h"
     import_kind: ImportKind
     line: int                 # 1-indexed line number in from_file
@@ -275,7 +276,7 @@ class UnifiedIR:
 
     # -- File lookups --
 
-    def get_file(self, path: str) -> Optional[FileNode]:
+    def get_file(self, path: str) -> FileNode | None:
         """Get a file node by project-relative path."""
         if not self._built:
             self.build_indices()
@@ -295,7 +296,7 @@ class UnifiedIR:
             self.build_indices()
         return self._sym_index.get(name, [])
 
-    def find_symdef(self, fqn: str) -> Optional[SymDef]:
+    def find_symdef(self, fqn: str) -> SymDef | None:
         """Find a symbol by its fully-qualified name."""
         if not self._built:
             self.build_indices()
@@ -362,28 +363,27 @@ class UnifiedIR:
 
     # -- Import graph (derive nx.DiGraph from this) --
 
-    def to_dependency_graph(self) -> "nx.DiGraph":
+    def to_dependency_graph(self) -> nx.DiGraph:
         """
         Derive a networkx DiGraph from the import edges.
         Node: file path. Edge: file → dependency file.
         """
-        import networkx as nx
-
-        G = nx.DiGraph()
+        graph = nx.DiGraph()
 
         for fn in self.file_nodes:
             if fn.error and not self.import_edges:
                 continue
-            G.add_node(fn.path)
+            graph.add_node(fn.path)
 
         for edge in self.import_edges:
-            if not edge.is_external and edge.to_file:
-                if edge.from_file in G:
-                    if edge.to_file not in G:
-                        G.add_node(edge.to_file)
-                    G.add_edge(edge.from_file, edge.to_file)
+            if edge.is_external or not edge.to_file:
+                continue
+            if edge.from_file in graph:
+                if edge.to_file not in graph:
+                    graph.add_node(edge.to_file)
+                graph.add_edge(edge.from_file, edge.to_file)
 
-        return G
+        return graph
 
 
 # ---------------------------------------------------------------------------
@@ -392,7 +392,7 @@ class UnifiedIR:
 
 
 def build_unified_ir(
-    scan_results: list["ScanResult"],
+    scan_results: list[ScanResult],
     project_root: str,
 ) -> UnifiedIR:
     """
@@ -413,9 +413,7 @@ def build_unified_ir(
     UnifiedIR
         Populated IR with file_nodes, sym_defs, import_edges, and call_edges.
     """
-    # Circular deppulse → ir → models is broken by importing at runtime below.
-    # (ScanResult and DependencyKind are only used in type annotations via
-    #  forward-reference strings, so they are not needed at runtime here.)
+    ir = UnifiedIR(project_root=project_root, scanned_at=datetime.now())
 
     for sr in scan_results:
         fn = FileNode(
@@ -444,7 +442,7 @@ def build_unified_ir(
             st = sym_type_map.get(sym.symbol_type, SymType.UNKNOWN)
 
             # Derive owner from fqn if it contains a dot
-            owner: Optional[str] = None
+            owner: str | None = None
             fqn_str = sym.fully_qualified or sym.name
             if "." in fqn_str and not fqn_str.startswith("."):
                 owner = fqn_str.rsplit(".", 1)[0]
@@ -515,7 +513,7 @@ def build_unified_ir(
     return ir
 
 
-def _depkind_to_importkind(kind: "DependencyKind") -> ImportKind:
+def _depkind_to_importkind(kind: DependencyKind) -> ImportKind:
     """Map DependencyKind (models.py) to ImportKind (ir.py)."""
     from deppulse.models import DependencyKind
 

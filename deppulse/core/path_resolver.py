@@ -9,8 +9,6 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path, PurePosixPath
-from typing import Optional
-
 
 # ---------------------------------------------------------------------------
 # Built-in Node.js stdlib modules (abridged — covers common ones)
@@ -25,15 +23,15 @@ _NODE_STDLIB: frozenset[str] = frozenset({
     "sys", "timers", "tls", "trace_events", "tty", "url", "util",
     "v8", "vm", "wasi", "worker_threads", "zlib",
     # Browser globals (partial)
-    "window", "document", "navigator", "fetch", "console", "setTimeout",
-    "setInterval", "clearTimeout", "clearInterval", "Promise", "Map", "Set",
+    "window", "document", "navigator", "fetch", "setTimeout",
+    "setInterval", "clearTimeout", "Promise", "Map", "Set",
     "WeakMap", "WeakSet", "Symbol", "Array", "Object", "Function",
     "Boolean", "Number", "String", "Date", "RegExp", "Error", "JSON",
     "Math", "parseInt", "parseFloat", "isNaN", "isFinite", "encodeURI",
     "decodeURI", "encodeURIComponent", "decodeURIComponent",
     # Common packages that are always external
     "react", "react-dom", "vue", "angular", "lodash", "underscore",
-    "axios", "fetch", "node-fetch", "jquery", "moment", "dayjs",
+    "axios", "node-fetch", "jquery", "moment", "dayjs",
 })
 
 
@@ -61,14 +59,14 @@ class PathResolver:
     def __init__(
         self,
         project_root: Path,
-        file_index: Optional[dict[str, Path]] = None,
+        file_index: dict[str, Path] | None = None,
     ) -> None:
         self.project_root = project_root.resolve()
         self.file_index: dict[str, Path] = file_index or {}
-        self._tsconfig_cache: Optional[dict] = None
-        self._tsconfig_paths: Optional[dict[str, list[str]]] = None
-        self._package_json_cache: Optional[dict] = None
-        self._package_exports: Optional[dict] = None
+        self._tsconfig_cache: dict | None = None
+        self._tsconfig_paths: dict[str, list[str]] | None = None
+        self._package_json_cache: dict | None = None
+        self._package_exports: dict | None = None
 
     # -- Index management --
 
@@ -86,7 +84,7 @@ class PathResolver:
         self,
         from_file: str,
         specifier: str,
-    ) -> Optional[str]:
+    ) -> str | None:
         """
         Resolve a relative import specifier from a source file.
 
@@ -154,7 +152,7 @@ class PathResolver:
         self,
         module_path: str,
         language: str,
-    ) -> Optional[str]:
+    ) -> str | None:
         """
         Resolve an absolute module path to a project-relative file path.
 
@@ -180,7 +178,7 @@ class PathResolver:
 
     # -- Python --
 
-    def _resolve_python(self, module_name: str) -> Optional[str]:
+    def _resolve_python(self, module_name: str) -> str | None:
         """Resolve a Python module name to a project-relative path."""
         parts = module_name.strip().split(".")
         if not parts or not parts[0]:
@@ -202,7 +200,7 @@ class PathResolver:
 
     # -- Java / Kotlin --
 
-    def _resolve_java_kotlin(self, fqn: str, language: str) -> Optional[str]:
+    def _resolve_java_kotlin(self, fqn: str, language: str) -> str | None:
         """
         Resolve a fully-qualified Java/Kotlin class name to a project-relative path.
         Uses package root discovery: walks src/main/java, src/main/kotlin.
@@ -226,7 +224,7 @@ class PathResolver:
 
     # -- JavaScript --
 
-    def _resolve_javascript(self, module_name: str) -> Optional[str]:
+    def _resolve_javascript(self, module_name: str) -> str | None:
         """Resolve a JavaScript/Node.js module specifier."""
         # Built-in Node.js stdlib
         root_name = module_name.split("/")[0].split("@")[0]
@@ -264,7 +262,7 @@ class PathResolver:
 
         return None
 
-    def _resolve_typescript(self, module_name: str) -> Optional[str]:
+    def _resolve_typescript(self, module_name: str) -> str | None:
         """Resolve a TypeScript module specifier using tsconfig paths or JS rules."""
         # Try tsconfig paths aliases first
         if self._tsconfig_paths:
@@ -290,7 +288,7 @@ class PathResolver:
 
     # -- C++ --
 
-    def _resolve_cpp(self, include_text: str) -> Optional[str]:
+    def _resolve_cpp(self, include_text: str) -> str | None:
         """Resolve a C++ #include path."""
         # Already resolved by the scanner using filesystem search
         # This is a no-op here — included for completeness
@@ -313,7 +311,7 @@ class PathResolver:
         self,
         module_name: str,
         exports: dict,
-    ) -> Optional[str]:
+    ) -> str | None:
         """Resolve using package.json exports field."""
         # Handle conditional exports
         resolved = exports.get(module_name)
@@ -330,7 +328,7 @@ class PathResolver:
 
         return None
 
-    def load_tsconfig(self, project_root: Optional[Path] = None) -> None:
+    def load_tsconfig(self, project_root: Path | None = None) -> None:
         """Load tsconfig.json paths mapping for alias resolution."""
         root = project_root or self.project_root
         tsconfig_path = root / "tsconfig.json"
@@ -347,7 +345,7 @@ class PathResolver:
         except (json.JSONDecodeError, OSError):
             self._tsconfig_paths = {}
 
-    def load_package_json(self, project_root: Optional[Path] = None) -> None:
+    def load_package_json(self, project_root: Path | None = None) -> None:
         """Load nearest package.json for main/exports resolution."""
         root = project_root or self.project_root
         pkg_path = root / "package.json"
@@ -423,6 +421,120 @@ class PathResolver:
             return False
         # Scoped packages (@scope/name), node_modules prefix
         return module.startswith("@") or root.startswith("node:")
+
+    # -- Public convenience resolvers --
+
+    def resolve_ts_alias(self, alias: str) -> list[str]:
+        """
+        Resolve a TypeScript path alias to one or more project-relative file paths.
+
+        Reads ``tsconfig.json`` ``compilerOptions.paths`` mapping.
+        For example, given ``tsconfig.json``::
+
+            {
+              "compilerOptions": {
+                "paths": {
+                  "@utils/*": ["src/utils/*"],
+                  "~/*": ["src/*"]
+                }
+              }
+            }
+
+        ``resolve_ts_alias("@utils/format")`` returns
+        ``["src/utils/format.ts", "src/utils/format.tsx", ...]``.
+
+        Parameters
+        ----------
+        alias : str
+            The path alias as written in the import (e.g. ``"@utils/format"``).
+
+        Returns
+        -------
+        list[str]
+            Candidate project-relative POSIX paths, checked against the file index
+            first, then filesystem. Empty list if the alias has no mapping.
+        """
+        if not self._tsconfig_paths:
+            self.load_tsconfig()
+
+        candidates: list[str] = []
+        for pattern, targets in self._tsconfig_paths.items():
+            if not isinstance(targets, list):
+                targets = [targets]
+
+            # Wildcard alias: "utils/*" → ["src/utils/*"]
+            if pattern.endswith("/*"):
+                prefix = pattern[:-2]  # e.g. "utils"
+                suffix = alias[len(prefix):].lstrip("/")  # remainder after the alias prefix
+                for target in targets:
+                    base = target.rstrip("/")  # e.g. "src/utils"
+                    candidate = f"{base}/{suffix}"
+                    candidates.extend(self._candidates_with_extensions(candidate))
+
+            # Exact alias: "@utils" → ["src/utils/index"]
+            elif alias == pattern or alias.startswith(pattern + "/"):
+                remainder = alias[len(pattern):].lstrip("/")
+                for target in targets:
+                    base = target.rstrip("/")
+                    candidate = f"{base}/{remainder}" if remainder else base
+                    candidates.extend(self._candidates_with_extensions(candidate))
+
+        return candidates
+
+    def resolve_java_package(
+        self,
+        fqn: str,
+        language: str = "java",
+    ) -> str | None:
+        """
+        Resolve a fully-qualified Java/Kotlin class name to a project-relative path.
+
+        This is a public wrapper around the internal ``_resolve_java_kotlin`` method
+        that exposes the same logic for external callers (e.g. scanners that need
+        to resolve package names independently of scan result resolution).
+
+        Parameters
+        ----------
+        fqn : str
+            Fully-qualified class name, e.g. ``"com.example.utils.StringHelper"``.
+        language : str
+            ``"java"`` or ``"kotlin"``.
+
+        Returns
+        -------
+        str or None
+            Project-relative POSIX path, or None if unresolved.
+        """
+        return self._resolve_java_kotlin(fqn, language)
+
+    def resolve_ts_alias_from_specifier(self, specifier: str) -> str | None:
+        """
+        Resolve a raw TypeScript import specifier, trying TS aliases first.
+
+        Tries in order:
+        1. tsconfig.json ``paths`` aliases (``@utils/foo`` → ``src/utils/foo.ts``)
+        2. Relative resolution (for ``./foo`` or ``../foo`` style)
+        3. JavaScript-style module resolution
+
+        Returns a project-relative POSIX path, or None if unresolved.
+        """
+        # Check if this looks like a path alias (non-relative, non-absolute)
+        if not specifier.startswith(".") and not specifier.startswith("/"):
+            # Try tsconfig paths
+            alias_candidates = self.resolve_ts_alias(specifier)
+            for candidate in alias_candidates:
+                if candidate in self.file_index:
+                    return candidate
+
+        return None
+
+    def _candidates_with_extensions(self, posix_path: str) -> list[str]:
+        """Return the path itself plus common extension variants."""
+        candidates = [posix_path]
+        for ext in (".ts", ".tsx", "/index.ts", "/index.tsx"):
+            if not posix_path.endswith(ext):
+                candidates.append(posix_path + ext)
+        return candidates
 
     @staticmethod
     def _is_cpp_stdlib(module: str) -> bool:
