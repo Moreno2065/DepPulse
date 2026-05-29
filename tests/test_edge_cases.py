@@ -1,6 +1,7 @@
 """Unit tests for edge cases: empty files, comment-only files, Unicode identifiers,
 deep directory trees, and cache behavior with large files."""
 
+import contextlib
 import shutil
 import tempfile
 from pathlib import Path
@@ -8,8 +9,7 @@ from pathlib import Path
 import pytest
 
 from deppulse.cache import ScanCache
-from deppulse.scanners.python_scanner import PythonScanner, PySymbolVisitor
-
+from deppulse.scanners.python_scanner import PySymbolVisitor, PythonScanner
 
 # =============================================================================
 # Python scanner edge cases
@@ -26,10 +26,8 @@ class TestPythonScannerEdgeCases:
         return fpath, tmpdir
 
     def _cleanup(self, tmpdir: Path) -> None:
-        try:
+        with contextlib.suppress(OSError):
             shutil.rmtree(tmpdir)
-        except OSError:
-            pass
 
     def test_empty_file(self):
         scanner = PythonScanner()
@@ -164,14 +162,12 @@ class TestCacheEdgeCases:
     def cache_dir(self):
         tmp = Path(tempfile.mkdtemp())
         yield tmp
-        try:
+        with contextlib.suppress(OSError):
             shutil.rmtree(tmp)
-        except OSError:
-            pass
 
     @pytest.fixture
     def cache(self, cache_dir):
-        return ScanCache.load(cache_dir_dir := cache_dir)
+        return ScanCache.load(cache_dir)
 
     def test_large_file_full_hash(self, cache, cache_dir):
         """Changes beyond the first 64 KB must invalidate the cache."""

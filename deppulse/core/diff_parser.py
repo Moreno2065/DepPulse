@@ -11,8 +11,6 @@ import subprocess
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Optional
-
 
 # ---------------------------------------------------------------------------
 # Types
@@ -40,8 +38,8 @@ class ChangedSymbol:
     fqn: str                           # fully-qualified name, e.g. "method:Utils.processData"
     change_type: ChangeType
     line_range: tuple[int, int]        # (start_line, end_line) 1-indexed
-    old_signature: Optional[str] = None  # old function signature text
-    new_signature: Optional[str] = None  # new function signature text
+    old_signature: str | None = None  # old function signature text
+    new_signature: str | None = None  # new function signature text
     language: str = "unknown"
 
 
@@ -80,8 +78,8 @@ class DiffParser:
 
     def __init__(
         self,
-        project_root: Optional[Path] = None,
-        file_index: Optional[dict[str, Path]] = None,
+        project_root: Path | None = None,
+        file_index: dict[str, Path] | None = None,
     ) -> None:
         self.project_root = project_root
         self.file_index = file_index or {}
@@ -104,9 +102,7 @@ class DiffParser:
             return []
 
         file_diffs: list[FileDiff] = []
-        current_file: Optional[FileDiff] = None
-        current_hunk_start = 0
-        in_hunk = False
+        current_file: FileDiff | None = None
 
         lines = diff_output.splitlines()
         i = 0
@@ -119,7 +115,6 @@ class DiffParser:
                 if current_file and current_file.changed_lines:
                     file_diffs.append(current_file)
                 current_file = None
-                in_hunk = False
 
             # File path in diff header
             elif line.startswith("--- "):
@@ -140,8 +135,6 @@ class DiffParser:
                     old_count = int(match.group(2))
                     new_start = int(match.group(3))
                     new_count = int(match.group(4))
-                    current_hunk_start = new_start
-                    in_hunk = True
 
                     # Record the changed line range
                     current_file.changed_lines.append((
@@ -267,12 +260,14 @@ class DiffParser:
 
             if line.startswith("+") and not line.startswith("+++"):
                 content = line[1:]
-                if content.strip() and not content.strip().startswith("//") and not content.strip().startswith("/*"):
+                stripped = content.strip()
+                if stripped and not stripped.startswith("//") and not stripped.startswith("/*"):
                     pending_additions.append((current_line, content))
 
-            if line.startswith(" ") or line.startswith("+") or line.startswith("-"):
-                if not line.startswith("-"):
-                    current_line += 1
+            if line.startswith(" ") or line.startswith("+"):
+                current_line += 1
+            elif line.startswith("-"):
+                pass
 
         # Analyze pending additions for symbol changes
         for line_no, content in pending_additions:
@@ -290,7 +285,7 @@ class DiffParser:
         content: str,
         line_no: int,
         language: str,
-    ) -> Optional[ChangedSymbol]:
+    ) -> ChangedSymbol | None:
         """Classify a single changed line as a symbol change."""
         stripped = content.strip()
 
@@ -310,7 +305,7 @@ class DiffParser:
         file_path: str,
         content: str,
         line_no: int,
-    ) -> Optional[ChangedSymbol]:
+    ) -> ChangedSymbol | None:
         """Classify a Python changed line."""
         # Function definition
         match = re.match(r"^(?:async\s+)?def\s+(\w+)\s*\(", content)
@@ -356,7 +351,7 @@ class DiffParser:
         content: str,
         line_no: int,
         language: str,
-    ) -> Optional[ChangedSymbol]:
+    ) -> ChangedSymbol | None:
         """Classify a Java/Kotlin changed line."""
         stripped = content.strip()
 
@@ -423,7 +418,7 @@ class DiffParser:
         content: str,
         line_no: int,
         language: str,
-    ) -> Optional[ChangedSymbol]:
+    ) -> ChangedSymbol | None:
         """Classify a JS/TS changed line."""
         stripped = content.strip()
 
@@ -483,7 +478,7 @@ class DiffParser:
         file_path: str,
         content: str,
         line_no: int,
-    ) -> Optional[ChangedSymbol]:
+    ) -> ChangedSymbol | None:
         """Classify a C++ changed line."""
         stripped = content.strip()
 

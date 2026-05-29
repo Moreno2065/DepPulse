@@ -1,8 +1,9 @@
 """Main entry point for the python_project fixture."""
 
-from utils.helpers import format_name
-from utils import compute_hash
 import json
+
+from utils import compute_hash
+from utils.helpers import format_name
 
 
 def main():

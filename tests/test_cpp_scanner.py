@@ -1,5 +1,6 @@
 """Tests for the C/C++ source code scanner."""
 
+import contextlib
 import shutil
 import tempfile
 from pathlib import Path
@@ -8,7 +9,6 @@ import pytest
 
 from deppulse.models import DependencyKind, Language
 from deppulse.scanners.cpp_scanner import CppScanner, _strip_comments
-
 
 FIXTURE_ROOT = Path(__file__).parent / "fixtures" / "mixed_project"
 
@@ -63,10 +63,8 @@ def _tmp_cpp_file(code: str, suffix: str = ".c") -> tuple[Path, Path]:
 
 
 def _cleanup_tmpdir(tmpdir: Path) -> None:
-    try:
+    with contextlib.suppress(OSError):
         shutil.rmtree(tmpdir)
-    except OSError:
-        pass
 
 
 class TestCppScanner:
@@ -196,6 +194,24 @@ int x = 1;
             assert len(result.resolved_dependencies) >= 0
         finally:
             _cleanup_tmpdir(tmpdir)
+
+
+def test_cpp_include_tree_sitter_only():
+    from deppulse.scanners.cpp_scanner import CppTreeSitterParser
+
+    source = b'''
+#include "local.h"
+#include <system.h>
+// #include "commented.h"
+    '''
+    parser = CppTreeSitterParser()
+    tree = parser.parse(source)
+    imports = parser.extract_imports(tree, "test.cpp", source=source)
+
+    specifiers = [i.specifier for i in imports]
+    assert "local.h" in specifiers
+    assert "system.h" in specifiers
+    assert "commented.h" not in specifiers
 
 
 # =============================================================================

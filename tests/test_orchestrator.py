@@ -1,15 +1,11 @@
 """Tests for the DependencyOrchestrator."""
 
-import tempfile
 from pathlib import Path
 
 import pytest
 
-from deppulse.cache import ScanCache
 from deppulse.config import DepPulseConfig
 from deppulse.core.orchestrator import DependencyOrchestrator, _get_scanner
-from deppulse.models import Language
-
 
 FIXTURE_ROOT = Path(__file__).parent / "fixtures" / "python_project"
 MIXED_ROOT = Path(__file__).parent / "fixtures" / "mixed_project"

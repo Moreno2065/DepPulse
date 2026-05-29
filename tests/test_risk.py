@@ -1,12 +1,12 @@
 """Tests for the risk scoring module."""
 
-import pytest
 from pathlib import Path
 
-from deppulse.core.risk import compute_risk_score, _is_core_path
-from deppulse.core.orchestrator import DependencyOrchestrator
-from deppulse.models import RiskLevel
+import pytest
 
+from deppulse.core.orchestrator import DependencyOrchestrator
+from deppulse.core.risk import _is_core_path, compute_risk_score
+from deppulse.models import RiskLevel
 
 FIXTURE_ROOT = Path(__file__).parent / "fixtures" / "python_project"
 
@@ -16,8 +16,7 @@ class TestRiskScoring:
     def graph(self):
         orchestrator = DependencyOrchestrator(use_cache=False)
         result = orchestrator.scan(FIXTURE_ROOT)
-        G = _build_graph(result)
-        return G
+        return _build_graph(result)
 
     def test_risk_score_zero_blast_radius(self, graph):
         """If nothing is affected, risk should be low."""
@@ -78,9 +77,10 @@ class TestCorePathDetection:
 def _build_graph(result):
     """Rebuild a networkx graph from GraphBuildResult."""
     import networkx as nx
+
     from deppulse.models import Language, NodeMetadata
 
-    G = nx.DiGraph()
+    graph = nx.DiGraph()
     for scan_result in result.scan_results:
         if scan_result.error and not scan_result.resolved_dependencies:
             continue
@@ -93,13 +93,13 @@ def _build_graph(result):
             unresolved_count=len(scan_result.unresolved_dependencies),
             external_count=len(scan_result.external_dependencies),
         )
-        G.add_node(scan_result.file_path, **vars(meta))
+        graph.add_node(scan_result.file_path, **vars(meta))
 
     for scan_result in result.scan_results:
         for resolved in scan_result.internal_dependencies:
             if resolved.normalized_path is None:
                 continue
-            if resolved.normalized_path not in G:
+            if resolved.normalized_path not in graph:
                 ghost = NodeMetadata(
                     path=resolved.normalized_path,
                     language=Language.UNKNOWN,
@@ -109,7 +109,7 @@ def _build_graph(result):
                     unresolved_count=0,
                     external_count=0,
                 )
-                G.add_node(resolved.normalized_path, **vars(ghost))
-            G.add_edge(scan_result.file_path, resolved.normalized_path)
+                graph.add_node(resolved.normalized_path, **vars(ghost))
+            graph.add_edge(scan_result.file_path, resolved.normalized_path)
 
-    return G
+    return graph

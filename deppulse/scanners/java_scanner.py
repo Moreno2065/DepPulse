@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 import javalang
 
@@ -36,7 +36,7 @@ def _is_external(module: str) -> bool:
     return module.startswith(prefixes)
 
 
-def _resolve_import_to_path(module: str, file_index: dict[str, Path]) -> Optional[str]:
+def _resolve_import_to_path(module: str, file_index: dict[str, Path]) -> str | None:
     """
     Convert a fully-qualified Java module name to a project-relative path.
 
@@ -68,11 +68,11 @@ class JavaJavalangParser:
         """Return the javalang module as the language marker."""
         return javalang
 
-    def parse(self, source: str) -> "CompilationUnit":
+    def parse(self, source: str) -> CompilationUnit:
         """Parse Java source code string and return a javalang CompilationUnit."""
         return javalang.parse.parse(source)
 
-    def parse_file(self, file_path: Path) -> "CompilationUnit":
+    def parse_file(self, file_path: Path) -> CompilationUnit:
         """Read and parse a Java source file, returning a javalang CompilationUnit."""
         content = file_path.read_text(encoding="utf-8")
         return self.parse(content)
@@ -94,13 +94,13 @@ class JavaScanner(BaseScanner):
 
     def __init__(
         self,
-        project_root: Optional[Path] = None,
-        file_index: Optional[dict[str, Path]] = None,
+        project_root: Path | None = None,
+        file_index: dict[str, Path] | None = None,
     ) -> None:
-        self._parser: Optional[JavaJavalangParser] = None
-        self._project_root: Optional[Path] = project_root
-        self._file_index: Optional[dict[str, Path]] = file_index
-        self._resolver: Optional[PathResolver] = None
+        self._parser: JavaJavalangParser | None = None
+        self._project_root: Path | None = project_root
+        self._file_index: dict[str, Path] | None = file_index
+        self._resolver: PathResolver | None = None
 
     @property
     def parser(self) -> JavaJavalangParser:
@@ -117,7 +117,7 @@ class JavaScanner(BaseScanner):
             self._resolver = PathResolver(project_root=root, file_index=self._file_index)
         return self._resolver
 
-    def parse_file(self, file_path: Path) -> "CompilationUnit":
+    def parse_file(self, file_path: Path) -> CompilationUnit:
         """Parse a Java file and return the javalang CompilationUnit."""
         return self.parser.parse_file(file_path)
 
@@ -128,7 +128,7 @@ class JavaScanner(BaseScanner):
         self,
         file_path: Path,
         project_root: Path,
-        file_index: dict[str, Path] = {},
+        file_index: dict[str, Path] | None = None,
     ) -> ScanResult:
         from deppulse.models import normalize_path_to_posix
 
@@ -151,7 +151,6 @@ class JavaScanner(BaseScanner):
             )
 
         # Extract package and imports via javalang AST
-        package_name: Optional[str] = None
         raw_deps: list[RawDependency] = []
         resolved_deps: list[ResolvedDependency] = []
         warnings: list[str] = []
@@ -167,12 +166,7 @@ class JavaScanner(BaseScanner):
 
         if tree is not None:
             try:
-                package_name = tree.package.name if tree.package else None
-            except Exception:
-                pass
-
-            try:
-                for path_node, node in tree:
+                for _path_node, node in tree:
                     if isinstance(node, javalang.tree.Import):
                         is_static = bool(node.static)
                         is_wildcard = bool(node.wildcard)
@@ -279,7 +273,7 @@ class JavaScanner(BaseScanner):
         is_static: bool,
         is_wildcard: bool,
         raw_dep: RawDependency,
-        file_index: dict[str, Path] = {},
+        file_index: dict[str, Path] | None = None,
     ) -> ResolvedDependency:
         """Resolve a Java import to a project file or classify as external/stdlib."""
         # 1. Try to resolve to a project file first

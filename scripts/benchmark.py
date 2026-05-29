@@ -28,7 +28,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -75,6 +75,15 @@ BENCHMARK_REPOS = {
 
 
 @dataclass
+class ManualSample:
+    metric: str
+    file_path: str
+    expected: int
+    detected: int
+    notes: str = ""
+
+
+@dataclass
 class RepoResult:
     name: str
     language: str
@@ -88,6 +97,7 @@ class RepoResult:
     call_edge_recall: float
     test_selection_precision: float
     warnings: list[str]
+    manual_samples: list[dict] = field(default_factory=list)
 
 
 @dataclass
@@ -178,6 +188,7 @@ class BenchmarkRunner:
             call_edge_recall=trace_result.get("call_edge_recall", 0.0),
             test_selection_precision=test_result.get("precision", 0.0),
             warnings=scan_result.get("warnings", []),
+            manual_samples=trace_result.get("manual_samples", []),
         )
 
     def _clone_repo(
@@ -218,6 +229,8 @@ class BenchmarkRunner:
                 shutil.rmtree(temp_dir, ignore_errors=True)
                 return None
             print(f"[OK] Cloned to {temp_dir}")
+            marker = temp_dir / f".{name}-cloned"
+            marker.write_text("", encoding="utf-8")
             return temp_dir
         except subprocess.TimeoutExpired:
             print(f"[FAIL] Clone timed out")
@@ -242,7 +255,11 @@ class BenchmarkRunner:
         try:
             from deppulse.core.orchestrator import DependencyOrchestrator
             from deppulse.config import DepPulseConfig
+        except Exception as e:
+            print(f"[FAIL] Cannot import DepPulse: {e}")
+            return None
 
+        try:
             config = DepPulseConfig.from_path(repo_path)
             orchestrator = DependencyOrchestrator(config=config, use_cache=False)
             result = orchestrator.scan(repo_path)
@@ -253,12 +270,13 @@ class BenchmarkRunner:
                 "warnings": result.warnings,
             }
         except Exception as e:
-            print(f"[WARN] Scan error: {e}")
+            print(f"[WARN] Scan error for {repo_name}: {e}")
+            import traceback
+            traceback.print_exc()
             return None
 
     def _run_traces(self, repo_path: Path, n_commits: int) -> dict:
         """Run deppulse trace on random recent commits."""
-        # Get recent commits
         try:
             result = subprocess.run(
                 ["git", "-C", str(repo_path), "log", "--oneline", "-n", "100"],
@@ -266,14 +284,34 @@ class BenchmarkRunner:
             )
             commits = [l.strip() for l in result.stdout.splitlines() if l.strip()]
         except Exception:
-            return {}
+            commits = []
 
-        sampled = random.sample(commits, min(n_commits, len(commits)))
+        sampled = random.sample(commits, min(n_commits, len(commits))) if commits else []
+
+        all_source_files = list(repo_path.rglob("*"))
+        source_files = [f for f in all_source_files if f.is_file() and f.suffix in (
+            ".py", ".kt", ".java", ".js", ".ts", ".tsx", ".c", ".cpp", ".h", ".hpp"
+        )]
+
+        samples: list[ManualSample] = []
+
+        if source_files:
+            for f in random.sample(source_files, min(20, len(source_files))):
+                samples.append(ManualSample(
+                    metric="import_recall",
+                    file_path=str(f.relative_to(repo_path)).replace("\\", "/"),
+                    expected=0,
+                    detected=0,
+                    notes="Count import/include directives manually and compare to tool output",
+                ))
+
         return {
-            "import_recall": 0.0,      # requires manual inspection
-            "import_precision": 0.0,   # requires manual inspection
-            "resolve_accuracy": 0.0,    # requires manual inspection
-            "call_edge_recall": 0.0,    # requires manual sampling
+            "import_recall": 0.0,
+            "import_precision": 0.0,
+            "resolve_accuracy": 0.0,
+            "call_edge_recall": 0.0,
+            "manual_samples": [asdict(s) for s in samples],
+            "sampled_commits": sampled,
         }
 
     def _run_test_selection(self, repo_path: Path, n_commits: int) -> dict:

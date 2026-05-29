@@ -1,10 +1,9 @@
 """User model for python_project fixture."""
 
+
 from utils.helpers import format_name
+
 from .profile import Profile
-from ..services.api import ApiClient
-import typing
-import collections
 
 
 class User:

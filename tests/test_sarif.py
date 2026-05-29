@@ -25,7 +25,6 @@ from deppulse.reporting.sarif import (
     _dependency_to_result,
 )
 
-
 FIXTURE_ROOT = Path(__file__).parent / "fixtures" / "python_project"
 
 

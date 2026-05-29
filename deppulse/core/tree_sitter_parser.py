@@ -9,14 +9,12 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from tree_sitter import Language, Tree
 
 from deppulse.core.ir import (
-    ImportEdge,
-    ImportKind,
     LineRange,
     RawCall,
     RawImport,
@@ -53,14 +51,14 @@ class TreeSitterParser(ABC):
 
     @property
     @abstractmethod
-    def language(self) -> "Language":
+    def language(self) -> Language:
         """Return the tree-sitter Language object for this parser."""
 
     # ------------------------------------------------------------------------
     # Core parsing
     # ------------------------------------------------------------------------
 
-    def parse(self, source: bytes) -> "Tree":
+    def parse(self, source: bytes) -> Tree:
         """
         Parse source bytes into a tree-sitter Tree.
 
@@ -74,12 +72,12 @@ class TreeSitterParser(ABC):
         parser = Parser(lang)
         return parser.parse(source)
 
-    def parse_file(self, file_path: Path) -> "Tree":
+    def parse_file(self, file_path: Path) -> Tree:
         """Parse a file from disk."""
         content = file_path.read_bytes()
         return self.parse(content)
 
-    def query(self, tree: "Tree", pattern: str) -> list:
+    def query(self, tree: Tree, pattern: str) -> list:
         """
         Run a tree-sitter query on a tree and return matched nodes.
 
@@ -100,7 +98,7 @@ class TreeSitterParser(ABC):
     @abstractmethod
     def extract_imports(
         self,
-        tree: "Tree",
+        tree: Tree,
         file_path: str,
     ) -> list[RawImport]:
         """
@@ -122,7 +120,7 @@ class TreeSitterParser(ABC):
     @abstractmethod
     def extract_symbols(
         self,
-        tree: "Tree",
+        tree: Tree,
         file_path: str,
     ) -> list[RawSymbol]:
         """
@@ -143,7 +141,7 @@ class TreeSitterParser(ABC):
 
     def extract_calls(
         self,
-        tree: "Tree",
+        tree: Tree,
         file_path: str,
     ) -> list[RawCall]:
         """
@@ -208,7 +206,7 @@ class TreeSitterParser(ABC):
         """Find all children of a given type."""
         return [c for c in node.children if c.type == child_type]
 
-    def _get_fqn(self, file_path: str, parent: Optional[str], name: str) -> str:
+    def _get_fqn(self, file_path: str, parent: str | None, name: str) -> str:
         """Build a fully-qualified name for a symbol."""
         if parent:
             return f"{parent}.{name}"
@@ -260,7 +258,7 @@ class TreeSitterParser(ABC):
 
         _walk(node, 0, callback)
 
-    def _all_nodes_of_type(self, tree: "Tree", node_type: str) -> list:
+    def _all_nodes_of_type(self, tree: Tree, node_type: str) -> list:
         """Return all nodes of a given type in a tree."""
         results = []
         def collect(n, depth):

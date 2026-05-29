@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Optional
-
 import networkx as nx
 
 from deppulse.models import (
@@ -35,7 +33,7 @@ class ImpactAnalyzer:
         self,
         mutated_file: str,
         max_chains: int = 50,
-        cc_size_cache: Optional[dict[str, int]] = None,
+        cc_size_cache: dict[str, int] | None = None,
     ) -> PerFileImpact:
         """
         Compute the impact of changing a single file.
@@ -161,13 +159,13 @@ class ImpactAnalyzer:
         Uses simple shortest-path traversal on the reversed graph.
         """
         chains: list[ImpactChain] = []
-        R = self.graph.reverse(copy=False)
+        rev_graph = self.graph.reverse(copy=False)
 
         for affected in affected_files:
             if len(chains) >= max_chains:
                 break
             try:
-                path = nx.shortest_path(R, affected, mutated_file)
+                path = nx.shortest_path(rev_graph, affected, mutated_file)
                 # Reverse: source -> ... -> mutated
                 forward_path = list(reversed(path))
                 chain = ImpactChain(chain=forward_path, length=len(forward_path) - 1)

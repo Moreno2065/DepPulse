@@ -1,10 +1,9 @@
 """Tests for the Java source code scanner."""
 
+import contextlib
 import shutil
 import tempfile
 from pathlib import Path
-
-import pytest
 
 from deppulse.models import DependencyKind, Language
 from deppulse.scanners.java_scanner import (
@@ -82,10 +81,8 @@ def _tmp_java_file(code: str) -> tuple[Path, Path]:
 
 
 def _cleanup_tmpdir(tmpdir: Path) -> None:
-    try:
+    with contextlib.suppress(OSError):
         shutil.rmtree(tmpdir)
-    except OSError:
-        pass
 
 
 class TestJavaScanner:

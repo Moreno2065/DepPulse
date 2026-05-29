@@ -1,5 +1,6 @@
 """Tests for the cache module."""
 
+import contextlib
 import shutil
 import tempfile
 import time
@@ -15,10 +16,8 @@ class TestScanCache:
     def cache_dir(self):
         tmp = Path(tempfile.mkdtemp())
         yield tmp
-        try:
+        with contextlib.suppress(OSError):
             shutil.rmtree(tmp)
-        except OSError:
-            pass
 
     @pytest.fixture
     def cache(self, cache_dir):

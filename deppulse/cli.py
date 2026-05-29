@@ -7,7 +7,6 @@ import os
 import subprocess
 import time
 from pathlib import Path
-from typing import Optional
 
 import networkx as nx
 
@@ -23,14 +22,12 @@ from deppulse.models import GraphBuildResult
 from deppulse.reporting import (
     assemble_audit_report,
     audit_report_to_json,
-    audit_report_to_markdown,
     graph_to_sarif,
     write_json_report,
     write_markdown_report,
     write_sarif_report,
 )
 from deppulse.ui import render as ui
-
 
 # ---------------------------------------------------------------------------
 # Argument parser
@@ -325,7 +322,7 @@ def _run_scan(
     project_path: Path,
     config: DepPulseConfig,
     use_cache: bool,
-    files_to_scan: Optional[set[str]] = None,
+    files_to_scan: set[str] | None = None,
 ) -> tuple[GraphBuildResult, nx.DiGraph, float]:
     """Run the orchestrator scan and return results with timing."""
     orchestrator = DependencyOrchestrator(config=config, use_cache=use_cache)
@@ -333,8 +330,8 @@ def _run_scan(
     result = orchestrator.scan(project_path, files_to_scan=files_to_scan)
     elapsed = time.monotonic() - start
 
-    G = _build_graph_from_results(result)
-    return result, G, elapsed
+    graph = _build_graph_from_results(result)
+    return result, graph, elapsed
 
 
 def _build_graph_from_results(result: GraphBuildResult) -> nx.DiGraph:
@@ -343,8 +340,7 @@ def _build_graph_from_results(result: GraphBuildResult) -> nx.DiGraph:
     # Build a minimal scan_results list so the orchestrator path is shared.
     from deppulse.core.orchestrator import DependencyOrchestrator
 
-    project_root = Path(result.project_root)
-    G = nx.DiGraph()
+    graph = nx.DiGraph()
 
     for scan_result in result.scan_results:
         from deppulse.models import NodeMetadata
@@ -359,13 +355,13 @@ def _build_graph_from_results(result: GraphBuildResult) -> nx.DiGraph:
             unresolved_count=len(scan_result.unresolved_dependencies),
             external_count=len(scan_result.external_dependencies),
         )
-        G.add_node(scan_result.file_path, **vars(meta))
+        graph.add_node(scan_result.file_path, **vars(meta))
 
     for scan_result in result.scan_results:
         for resolved in scan_result.internal_dependencies:
             if resolved.normalized_path is None:
                 continue
-            if resolved.normalized_path not in G:
+            if resolved.normalized_path not in graph:
                 from deppulse.models import Language, NodeMetadata
                 ghost = NodeMetadata(
                     path=resolved.normalized_path,
@@ -376,11 +372,11 @@ def _build_graph_from_results(result: GraphBuildResult) -> nx.DiGraph:
                     unresolved_count=0,
                     external_count=0,
                 )
-                G.add_node(resolved.normalized_path, **vars(ghost))
+                graph.add_node(resolved.normalized_path, **vars(ghost))
             resolved_by = DependencyOrchestrator._edge_resolved_by(
                 scan_result.absolute_path, resolved.normalized_path
             )
-            G.add_edge(
+            graph.add_edge(
                 scan_result.file_path,
                 resolved.normalized_path,
                 raw_text=resolved.raw.raw_text,
@@ -388,7 +384,7 @@ def _build_graph_from_results(result: GraphBuildResult) -> nx.DiGraph:
                 line_number=resolved.raw.line_number,
                 resolved_by=resolved_by,
             )
-    return G
+    return graph
 
 
 # ---------------------------------------------------------------------------
@@ -404,7 +400,7 @@ def _cmd_scan(args: argparse.Namespace) -> int:
         ui.set_ci_mode(True)
 
     # Incremental / --since mode
-    files_to_scan: Optional[set[str]] = None
+    files_to_scan: set[str] | None = None
     if args.incremental or args.since:
         project_path = args.path.resolve()
         if not is_git_repo(project_path):
@@ -429,7 +425,7 @@ def _cmd_scan(args: argparse.Namespace) -> int:
             ui.console.print("[dim]No changed files found. Use full scan for initial analysis.[/dim]")
             files_to_scan = None
 
-    result, G, elapsed = _run_scan(args.path, config, use_cache=not args.no_cache, files_to_scan=files_to_scan)
+    result, graph, elapsed = _run_scan(args.path, config, use_cache=not args.no_cache, files_to_scan=files_to_scan)
 
     # Write SARIF first so it's produced regardless of other output flags
     if args.sarif_output:
@@ -460,11 +456,11 @@ def _cmd_scan(args: argparse.Namespace) -> int:
 def _cmd_trace(args: argparse.Namespace) -> int:
     """Handle: deppulse trace <path> <mutated_file>"""
     config = DepPulseConfig.from_path(args.path.resolve())
-    
+
     if args.ci:
         ui.set_ci_mode(True)
-    
-    result, G, elapsed = _run_scan(args.path, config, use_cache=not args.no_cache)
+
+    result, graph, elapsed = _run_scan(args.path, config, use_cache=not args.no_cache)
 
     mutated_files = args.mutated_file
     # Normalize paths to project-relative POSIX format (must match graph node keys)
@@ -488,7 +484,7 @@ def _cmd_trace(args: argparse.Namespace) -> int:
         normalized.append(f_str)
 
     # Filter to files in the graph
-    graph_files = set(G.nodes())
+    graph_files = set(graph.nodes())
     found = [f for f in normalized if f in graph_files]
     not_found = [f for f in normalized if f not in graph_files]
 
@@ -499,12 +495,12 @@ def _cmd_trace(args: argparse.Namespace) -> int:
     if not_found:
         ui.console.print(f"[dim]Files not in graph (unsupported or filtered): {not_found}[/dim]")
 
-    analyzer = ImpactAnalyzer(G)
+    analyzer = ImpactAnalyzer(graph)
     impact = analyzer.analyze_files(found, max_chains=args.max_chains)
 
     # Compute risk
     risk = compute_risk_score(
-        G, found,
+        graph, found,
         blast_radius_percent=impact.blast_radius_percent,
     )
 
@@ -558,22 +554,22 @@ def _cmd_diff(args: argparse.Namespace) -> int:
 
     # Run the scan
     config = DepPulseConfig.from_path(project_path)
-    result, G, _ = _run_scan(project_path, config, use_cache=not args.no_cache)
+    result, graph, _ = _run_scan(project_path, config, use_cache=not args.no_cache)
 
     # Filter changed files to those in the graph
-    graph_files = set(G.nodes())
+    graph_files = set(graph.nodes())
     found = [f for f in changed_files if f in graph_files]
     not_found = [f for f in changed_files if f not in graph_files]
 
     # Compute impact
     impact = None
     if found:
-        analyzer = ImpactAnalyzer(G)
+        analyzer = ImpactAnalyzer(graph)
         impact = analyzer.analyze_files(found, max_chains=args.max_chains)
 
         # Compute risk
         risk = compute_risk_score(
-            G, found,
+            graph, found,
             blast_radius_percent=impact.blast_radius_percent,
         )
 
@@ -600,7 +596,7 @@ def _cmd_diff(args: argparse.Namespace) -> int:
 
     # Write markdown if requested
     if args.markdown and impact:
-        audit = assemble_audit_report(result, G, scan_duration=0.0)
+        audit = assemble_audit_report(result, graph, scan_duration=0.0)
         write_markdown_report(audit, args.markdown)
         ui.console.print(f"[green]Markdown report written to {args.markdown}[/green]")
 
@@ -610,13 +606,13 @@ def _cmd_diff(args: argparse.Namespace) -> int:
 def _cmd_cycles(args: argparse.Namespace) -> int:
     """Handle: deppulse cycles <path>"""
     config = DepPulseConfig.from_path(args.path.resolve())
-    
+
     if args.ci:
         ui.set_ci_mode(True)
-    
-    result, G, _ = _run_scan(args.path, config, use_cache=not args.no_cache)
 
-    cycle_report = find_cycles(G)
+    result, graph, _ = _run_scan(args.path, config, use_cache=not args.no_cache)
+
+    cycle_report = find_cycles(graph)
 
     if args.json:
         ui.render_json_output({
@@ -637,29 +633,27 @@ def _cmd_cycles(args: argparse.Namespace) -> int:
 def _cmd_report(args: argparse.Namespace) -> int:
     """Handle: deppulse report <path>"""
     config = DepPulseConfig.from_path(args.path.resolve())
-    
+
     if args.ci:
         ui.set_ci_mode(True)
-    
-    start = time.monotonic()
-    result, G, elapsed = _run_scan(args.path, config, use_cache=not args.no_cache)
 
-    cycle_report = find_cycles(G) if args.include_cycles else None
+    result, graph, elapsed = _run_scan(args.path, config, use_cache=not args.no_cache)
+
+    cycle_report = find_cycles(graph) if args.include_cycles else None
 
     # Compute risk for high-impact files
-    risk_report = None
     if args.include_risk:
-        top_files = sorted(G.nodes(), key=lambda n: G.in_degree(n), reverse=True)[:5]
+        top_files = sorted(graph.nodes(), key=lambda n: graph.in_degree(n), reverse=True)[:5]
         if top_files:
-            blast = len(top_files) / max(G.number_of_nodes(), 1) * 100
-            risk_report = compute_risk_score(
-                G, top_files,
+            blast = len(top_files) / max(graph.number_of_nodes(), 1) * 100
+            compute_risk_score(
+                graph, top_files,
                 blast_radius_percent=blast,
                 cycle_count=cycle_report.cycle_count if cycle_report else 0,
                 cycle_files=cycle_report.total_files_in_cycles if cycle_report else 0,
             )
 
-    audit = assemble_audit_report(result, G, cycle_report, scan_duration=elapsed)
+    audit = assemble_audit_report(result, graph, cycle_report, scan_duration=elapsed)
 
     if args.json_output:
         write_json_report(audit, args.json_output)
@@ -692,7 +686,7 @@ def _cmd_callgraph(args: argparse.Namespace) -> int:
     if args.ci:
         ui.set_ci_mode(True)
 
-    result, G, _ = _run_scan(args.path, config, use_cache=not args.no_cache)
+    result, graph, _ = _run_scan(args.path, config, use_cache=not args.no_cache)
 
     # Build call graph
     from deppulse.core.callgraph import CallGraphBuilder
@@ -706,8 +700,8 @@ def _cmd_callgraph(args: argparse.Namespace) -> int:
             e for e in cg_result.edges
             if args.file in e.caller.file_path or args.file in e.callee.file_path
         ]
-        from deppulse.models import CallGraphResult as _CGR
-        cg_result = _CGR(
+        from deppulse.models import CallGraphResult as Cgr
+        cg_result = Cgr(
             project_root=cg_result.project_root,
             scanned_at=cg_result.scanned_at,
             nodes=filtered_nodes,
@@ -753,12 +747,12 @@ def _cmd_viz(args: argparse.Namespace) -> int:
     if args.ci:
         ui.set_ci_mode(True)
 
-    result, G, _ = _run_scan(args.path, config, use_cache=not args.no_cache)
+    result, graph, _ = _run_scan(args.path, config, use_cache=not args.no_cache)
 
     # Filter graph by focus/depth/risk
     if args.focus:
         focus_node = args.focus.replace("\\", "/")
-        if focus_node not in G:
+        if focus_node not in graph:
             ui.console.print(f"[yellow]Focus file '{focus_node}' not found in graph.[/yellow]")
             return 1
 
@@ -771,24 +765,23 @@ def _cmd_viz(args: argparse.Namespace) -> int:
                 next_frontier: set[str] = set()
                 for node in current_frontier:
                     # Descendants: files this node depends on (out-edges)
-                    next_frontier.update(G.successors(node))
+                    next_frontier.update(graph.successors(node))
                     # Ancestors: files that depend on this node (in-edges)
-                    next_frontier.update(G.predecessors(node))
+                    next_frontier.update(graph.predecessors(node))
                 nodes_to_keep.update(next_frontier)
                 current_frontier = next_frontier
 
-            nodes_to_remove = set(G.nodes()) - nodes_to_keep
-            G.remove_nodes_from(nodes_to_remove)
+            nodes_to_remove = set(graph.nodes()) - nodes_to_keep
+            graph.remove_nodes_from(nodes_to_remove)
 
     if args.format == "html":
         from deppulse.ui.visualize import render_html_dashboard
         output_path = args.output or Path("deppulse-dashboard.html")
-        render_html_dashboard(result, G, output_path=output_path)
+        render_html_dashboard(result, graph, output_path=output_path)
         ui.console.print(f"[green]HTML dashboard written to {output_path}[/green]")
     elif args.format == "mermaid":
         from deppulse.ui.visualize import render_mermaid_graph
-        from deppulse.ui.visualize import graph_to_mermaid
-        output = render_mermaid_graph(G, title="Dependency Graph")
+        output = render_mermaid_graph(graph, title="Dependency Graph")
         if args.output:
             args.output.write_text(output, encoding="utf-8")
             ui.console.print(f"[green]Mermaid diagram written to {args.output}[/green]")
@@ -796,7 +789,7 @@ def _cmd_viz(args: argparse.Namespace) -> int:
             print(output)
     elif args.format == "dot":
         from deppulse.ui.visualize import render_dot_graph
-        output = render_dot_graph(G, title="Dependency Graph")
+        output = render_dot_graph(graph, title="Dependency Graph")
         if args.output:
             args.output.write_text(output, encoding="utf-8")
             ui.console.print(f"[green]DOT graph written to {args.output}[/green]")
@@ -809,10 +802,10 @@ def _cmd_viz(args: argparse.Namespace) -> int:
 def _cmd_doctor(args: argparse.Namespace) -> int:
     """Handle: deppulse doctor <path>"""
     project_path = args.path.resolve()
-    
+
     if args.ci:
         ui.set_ci_mode(True)
-    
+
     config = DepPulseConfig.from_path(project_path)
 
     project_exists = project_path.exists() and project_path.is_dir()
@@ -821,14 +814,13 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
     # Count supported files
     supported = 0
     try:
-        from deppulse.core.orchestrator import DependencyOrchestrator, _SCANNER_REGISTRY
+        from deppulse.core.orchestrator import _SCANNER_REGISTRY
         for dirpath, dirnames, filenames in __import__("os").walk(project_path):
             dirnames[:] = [d for d in dirnames if not config.should_ignore_dir(d)]
             for fname in filenames:
                 if config.should_ignore_file(fname):
                     continue
-                from pathlib import Path as P
-                if any(s.can_scan(P(dirpath) / fname) for s in _SCANNER_REGISTRY):
+                if any(s.can_scan(Path(dirpath) / fname) for s in _SCANNER_REGISTRY):
                     supported += 1
     except OSError:
         supported = 0
@@ -849,7 +841,7 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         cache_status = "Not present (no cache)"
 
     config_loaded = (
-        f"Loaded from deppulse.json" if config._config_file and config._config_file.exists()
+        "Loaded from deppulse.json" if config._config_file and config._config_file.exists()
         else "Defaults (no deppulse.json)"
     )
 
@@ -906,11 +898,11 @@ def _cmd_tests(args: argparse.Namespace) -> int:
         return 0
 
     # Run the scan
-    result, G, _ = _run_scan(project_path, config, use_cache=not args.no_cache)
+    result, graph, _ = _run_scan(project_path, config, use_cache=not args.no_cache)
 
     # Select tests using DiffParser for line-level analysis
     from deppulse.core.test_selector import TestSelector
-    selector = TestSelector(G, config=config)
+    selector = TestSelector(graph, config=config)
     test_result = selector.select_tests(
         changed_files,
         max_blast=args.max_blast,
@@ -920,7 +912,6 @@ def _cmd_tests(args: argparse.Namespace) -> int:
 
     # Output based on format
     if args.format == "json":
-        import json
         data = {
             "changed_files": test_result.changed_files,
             "selected_tests": test_result.selected_tests,
@@ -969,7 +960,7 @@ def _cmd_snapshot(args: argparse.Namespace) -> int:
 
     if args.snapshot_cmd == "save":
         config = DepPulseConfig.from_path(project_path)
-        result, G, _ = _run_scan(project_path, config, use_cache=not args.no_cache)
+        result, graph, _ = _run_scan(project_path, config, use_cache=not args.no_cache)
         meta = manager.save(result, tag=args.tag)
         ui.render_snapshot_meta(meta)
         ui.console.print(f"[green]Snapshot saved: {meta.tag}[/green]")
@@ -983,7 +974,6 @@ def _cmd_snapshot(args: argparse.Namespace) -> int:
     elif args.snapshot_cmd == "diff":
         diff = manager.diff(args.from_tag, args.to_tag)
         if args.json:
-            import json
             data = {
                 "older": {"tag": diff.older.tag, "commit_hash": diff.older.commit_hash,
                           "total_files": diff.older.total_files, "total_edges": diff.older.total_edges},
@@ -1003,7 +993,7 @@ def _cmd_snapshot(args: argparse.Namespace) -> int:
         if args.ci:
             ui.set_ci_mode(True)
         config = DepPulseConfig.from_path(project_path)
-        result, G, _ = _run_scan(project_path, config, use_cache=not args.no_cache)
+        result, graph, _ = _run_scan(project_path, config, use_cache=not args.no_cache)
         diff, alerts = manager.check_trends(args.since_tag)
         ui.render_snapshot_diff(diff)
         ui.render_trend_alerts(alerts)
@@ -1039,11 +1029,11 @@ def _cmd_pr_report(args: argparse.Namespace) -> int:
         return 0
 
     # Run the scan
-    result, G, _ = _run_scan(project_path, config, use_cache=not args.no_cache)
+    result, graph, _ = _run_scan(project_path, config, use_cache=not args.no_cache)
 
     # Generate PR report
     from deppulse.core.pr_reporter import PRReporter
-    reporter = PRReporter(G, config=config)
+    reporter = PRReporter(graph, config=config)
     report = reporter.generate(changed_files, base_ref=args.base)
 
     # Output based on format
@@ -1082,7 +1072,7 @@ def _cmd_pr_report(args: argparse.Namespace) -> int:
 # Entry point
 # ---------------------------------------------------------------------------
 
-def main(argv: Optional[list[str]] = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     """Main CLI entry point."""
     parser = _build_parser()
     args = parser.parse_args(argv)

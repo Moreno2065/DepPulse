@@ -7,8 +7,6 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from pathlib import PurePosixPath, PureWindowsPath
-from typing import Optional
-
 
 # ---------------------------------------------------------------------------
 # Enumerations
@@ -87,7 +85,7 @@ class ResolvedDependency:
     """
 
     raw: RawDependency
-    normalized_path: Optional[str]  # project-relative POSIX path, or None
+    normalized_path: str | None  # project-relative POSIX path, or None
     is_external: bool               # True if not a local project file
     is_stdlib: bool                 # True if Python stdlib
     is_unresolved: bool            # True if we could not resolve it
@@ -139,7 +137,7 @@ class ScanResult:
     symbols: list[ExtractedSymbol] = field(default_factory=list)
     dynamic_imports: list[DynamicImport] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
-    error: Optional[str] = None  # non-empty if scan failed catastrophically
+    error: str | None = None  # non-empty if scan failed catastrophically
     is_script: bool = False       # True for Kotlin .kts script files
 
     @property
@@ -220,7 +218,7 @@ class GraphBuildResult:
     warnings: list[str] = field(default_factory=list)
     # Unified IR built from scan results; None if scan() did not build it.
     # Available after DependencyOrchestrator.scan() completes.
-    unified_ir: Optional["UnifiedIR"] = None
+    unified_ir: UnifiedIR | None = None
 
 
 # Forward reference for the UnifiedIR type annotation above.
@@ -362,7 +360,7 @@ class Symbol:
     symbol_type: SymbolType
     language: Language
     line_number: int = 0
-    signature: Optional[str] = None  # e.g. "(str, int) -> bool"
+    signature: str | None = None  # e.g. "(str, int) -> bool"
 
 
 @dataclass
@@ -433,7 +431,7 @@ class AuditReport:
     project_path: str
     generated_at: datetime
     graph_stats: GraphStats
-    cycle_report: Optional[CycleReport]
+    cycle_report: CycleReport | None
     top_depended_on: list[TopFileEntry]      # files depended on most (in-degree)
     top_outgoing: list[TopFileEntry]         # files depending on most (out-degree)
     unresolved_summary: list[ResolvedDependency]

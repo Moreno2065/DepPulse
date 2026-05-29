@@ -1,15 +1,14 @@
 """Tests for the Kotlin source code scanner."""
 
+import contextlib
 import shutil
 import tempfile
 from pathlib import Path
 
-import pytest
-
 from deppulse.models import DependencyKind, Language
 from deppulse.scanners.kotlin_scanner import (
     KotlinScanner,
-    _extract_symbols_regex,
+    KotlinTreeSitterParser,
     _is_external,
     _is_stdlib,
     _resolve_import_to_path,
@@ -79,63 +78,69 @@ class TestKotlinScannerHelpers:
         assert result is None
 
 
-class TestExtractSymbolsRegex:
+def _extract_symbols(code: str):
+    parser = KotlinTreeSitterParser()
+    tree = parser.parse(code.encode("utf-8"))
+    return parser.extract_symbols(tree, "test.kt")
+
+
+class TestExtractSymbolsTreeSitter:
     def test_simple_function(self):
         code = "fun hello() { println(\"hi\") }"
-        symbols = _extract_symbols_regex(code)
-        names = {s.fully_qualified for s in symbols}
+        symbols = _extract_symbols(code)
+        names = {s.fqn for s in symbols}
         assert "function:hello" in names
 
     def test_class_symbol(self):
         code = "class MyService { fun run() {} }"
-        symbols = _extract_symbols_regex(code)
-        names = {s.fully_qualified for s in symbols}
+        symbols = _extract_symbols(code)
+        names = {s.fqn for s in symbols}
         assert "class:MyService" in names
 
     def test_method_inside_class(self):
         code = "class MyService {\n    fun run() {}\n}"
-        symbols = _extract_symbols_regex(code)
-        names = {s.fully_qualified for s in symbols}
+        symbols = _extract_symbols(code)
+        names = {s.fqn for s in symbols}
         assert "class:MyService" in names
         assert "method:MyService.run" in names
 
     def test_interface_symbol(self):
         code = "interface Callback { fun invoke() }"
-        symbols = _extract_symbols_regex(code)
-        names = {s.fully_qualified for s in symbols}
+        symbols = _extract_symbols(code)
+        names = {s.fqn for s in symbols}
         assert "class:Callback" in names
 
     def test_object_symbol(self):
         code = "object Logger { fun log(msg: String) {} }"
-        symbols = _extract_symbols_regex(code)
-        names = {s.fully_qualified for s in symbols}
+        symbols = _extract_symbols(code)
+        names = {s.fqn for s in symbols}
         assert "class:Logger" in names
 
     def test_annotation_class(self):
         code = "annotation class Config(val key: String)"
-        symbols = _extract_symbols_regex(code)
-        names = {s.fully_qualified for s in symbols}
+        symbols = _extract_symbols(code)
+        names = {s.fqn for s in symbols}
         assert "class:Config" in names
 
     def test_property_top_level(self):
         code = "val PI = 3.14\nfun main() {}"
-        symbols = _extract_symbols_regex(code)
-        names = {s.fully_qualified for s in symbols}
+        symbols = _extract_symbols(code)
+        names = {s.fqn for s in symbols}
         assert "property:PI" in names
         assert "function:main" in names
 
     def test_property_inside_class(self):
         code = "class Person {\n    val name: String = \"\"\n    fun greet() {}\n}"
-        symbols = _extract_symbols_regex(code)
-        names = {s.fully_qualified for s in symbols}
+        symbols = _extract_symbols(code)
+        names = {s.fqn for s in symbols}
         assert "class:Person" in names
         assert "property:Person.name" in names
         assert "method:Person.greet" in names
 
     def test_multiple_classes(self):
         code = "class Foo {\n    fun a() {}\n}\nclass Bar {\n    fun b() {}\n}"
-        symbols = _extract_symbols_regex(code)
-        names = {s.fully_qualified for s in symbols}
+        symbols = _extract_symbols(code)
+        names = {s.fqn for s in symbols}
         assert "class:Foo" in names
         assert "method:Foo.a" in names
         assert "class:Bar" in names
@@ -143,16 +148,16 @@ class TestExtractSymbolsRegex:
 
     def test_nested_class_simple(self):
         code = "class Outer {\n    class Inner {\n        fun innerMethod() {}\n    }\n}"
-        symbols = _extract_symbols_regex(code)
-        names = {s.fully_qualified for s in symbols}
+        symbols = _extract_symbols(code)
+        names = {s.fqn for s in symbols}
         assert "class:Outer" in names
         assert "class:Inner" in names
         assert "method:Inner.innerMethod" in names
 
     def test_comments_ignored(self):
         code = "// fun commentedOut() {}\nfun actual() {}"
-        symbols = _extract_symbols_regex(code)
-        names = {s.fully_qualified for s in symbols}
+        symbols = _extract_symbols(code)
+        names = {s.fqn for s in symbols}
         assert "function:actual" in names
 
 
@@ -165,10 +170,8 @@ def _tmp_kotlin_file(code: str, suffix: str = ".kt") -> tuple[Path, Path]:
 
 
 def _cleanup_tmpdir(tmpdir: Path) -> None:
-    try:
+    with contextlib.suppress(OSError):
         shutil.rmtree(tmpdir)
-    except OSError:
-        pass
 
 
 class TestKotlinScanner:
@@ -321,3 +324,27 @@ class TestKotlinScanner:
             assert len(result.raw_dependencies) == 1
         finally:
             _cleanup_tmpdir(tmpdir)
+
+
+def test_kotlin_nested_class_and_extension():
+    from deppulse.scanners.kotlin_scanner import KotlinTreeSitterParser
+
+    source = b'''
+package com.example
+
+class Outer {
+    inner class Inner
+    fun method() {}
+}
+
+fun String.extension() {}
+    '''
+    parser = KotlinTreeSitterParser()
+    tree = parser.parse(source)
+    symbols = parser.extract_symbols(tree, "test.kt")
+
+    names = {s.name for s in symbols}
+    assert "Outer" in names
+    assert "Inner" in names
+    assert "method" in names
+    assert "extension" in names

@@ -15,11 +15,10 @@ This module provides two classes:
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 from deppulse.core.ir import (
     ImportKind,
-    LineRange,
     RawCall,
     RawImport,
     RawSymbol,
@@ -40,7 +39,8 @@ from deppulse.models import (
 from deppulse.scanners.base import BaseScanner
 
 if TYPE_CHECKING:
-    from tree_sitter import Language as TSLanguage, Tree
+    from tree_sitter import Language as TSLanguage
+    from tree_sitter import Tree
 
 
 # ---------------------------------------------------------------------------
@@ -59,7 +59,7 @@ def _is_external(module: str) -> bool:
     return module.startswith(prefixes)
 
 
-def _resolve_import_to_path(module: str, file_index: Optional[dict]) -> Optional[str]:
+def _resolve_import_to_path(module: str, file_index: dict | None) -> str | None:
     """
     Convert a fully-qualified Kotlin module name to a project-relative path.
     e.g. com.example.utils -> com/example/utils.kt
@@ -90,126 +90,17 @@ def _fq_with_prefix(sym_type: str, name: str, fqn: str) -> str:
     return f"{sym_type}:{name}"
 
 
-def _extract_symbols_regex(content: str) -> list[ExtractedSymbol]:
-    """
-    Compatibility shim: extract Kotlin symbols from source code.
-
-    Uses tree-sitter-kotlin for accurate extraction when available.
-    Falls back to a regex-based approach for simple test cases.
-    Returns list of ExtractedSymbol (same as the old regex implementation).
-    """
-    from deppulse.models import ExtractedSymbol
-
-    # Always use the regex-based extraction for backward compatibility.
-    # The tree-sitter-based approach is used by KotlinTreeSitterParser in production,
-    # but the regex approach produces correct fqns that match the legacy tests.
-    import re
-    symbols: list[ExtractedSymbol] = []
-    content = re.sub(r"/\*.*?\*/", "", content, flags=re.DOTALL)
-
-    # Track brace depth and current class context
-    brace_depth = 0
-    class_stack: list[str] = []
-
-    RE_CLASS = re.compile(r"^\s*(?:class|interface|object|annotation\s+class)\s+(\w+)")
-    RE_FUNC = re.compile(r"^\s*(?!(?:val|var)\b)\bfun\s+(\w+)\s*(?:[<{(]|$)")
-    RE_PROP = re.compile(r"^\s*(?:val|var)\s+(\w+)")
-
-    for line in content.split(chr(10)):
-        stripped = line.lstrip()
-        if not stripped or stripped.startswith("//"):
-            continue
-
-        opens = stripped.count("{")
-        closes = stripped.count("}")
-
-        # Class declarations (including interface/object/annotation)
-        class_match = RE_CLASS.match(stripped)
-        if class_match:
-            class_name = class_match.group(1)
-            # Use "class" as sym_type for all type declarations for backward compatibility
-            sym_type = "class"
-            fqn = f"class:{class_name}"
-            symbols.append(ExtractedSymbol(
-                symbol_type=sym_type,
-                name=class_name,
-                fully_qualified=fqn,
-            ))
-            # Store with prefix in class_stack for consistent stripping later
-            class_stack.append(fqn)
-            # Update brace depth BEFORE continuing so we track being inside the class
-            brace_depth += opens - closes
-            brace_depth = max(0, brace_depth)
-            continue
-
-        # Function / property declarations
-        in_class = brace_depth >= 1
-        current_class = class_stack[-1] if class_stack else None
-
-        if in_class:
-            # For methods inside class, strip any existing prefix from current_class
-            if current_class and current_class.startswith(("class:", "interface:", "object:", "annotation:")):
-                current_class = current_class.split(":", 1)[1]
-            func_match = RE_FUNC.search(stripped)
-            if func_match:
-                func_name = func_match.group(1)
-                symbols.append(ExtractedSymbol(
-                    symbol_type="method",
-                    name=func_name,
-                    fully_qualified=f"method:{current_class}.{func_name}",
-                ))
-            else:
-                # Also check for properties inside class
-                prop_match = RE_PROP.match(stripped)
-                if prop_match:
-                    prop_name = prop_match.group(1)
-                    symbols.append(ExtractedSymbol(
-                        symbol_type="property",
-                        name=prop_name,
-                        fully_qualified=f"property:{current_class}.{prop_name}",
-                    ))
-        else:
-            # Top-level: check for functions FIRST, then properties
-            func_match = RE_FUNC.match(stripped)
-            if func_match:
-                func_name = func_match.group(1)
-                symbols.append(ExtractedSymbol(
-                    symbol_type="function",
-                    name=func_name,
-                    fully_qualified=f"function:{func_name}",
-                ))
-            else:
-                prop_match = RE_PROP.match(stripped)
-                if prop_match:
-                    prop_name = prop_match.group(1)
-                    symbols.append(ExtractedSymbol(
-                        symbol_type="property",
-                        name=prop_name,
-                        fully_qualified=f"property:{prop_name}",
-                    ))
-
-        # Update brace depth
-        brace_depth += opens - closes
-        brace_depth = max(0, brace_depth)
-
-        # Exit classes when back to brace_depth 0
-        if closes > 0 and brace_depth == 0:
-            class_stack.clear()
-
-    return symbols
-
-
 # ---------------------------------------------------------------------------
 # tree-sitter-kotlin language binding
 # ---------------------------------------------------------------------------
 
 try:
     from tree_sitter_kotlin import language as _kotlin_language
-except ImportError:  # pragma: no cover
+except ImportError as _err:  # pragma: no cover
     raise ImportError(
         "tree-sitter-kotlin is not installed. "
         "Install it with: pip install tree-sitter-kotlin"
-    )
+    ) from _err
 
 
 # ---------------------------------------------------------------------------
@@ -233,7 +124,7 @@ class KotlinTreeSitterParser(TreeSitterParser):
     language_name = "kotlin"
 
     @property
-    def language(self) -> "TSLanguage":
+    def language(self) -> TSLanguage:
         """Return the tree-sitter Language object for Kotlin."""
         from tree_sitter import Language
 
@@ -242,10 +133,10 @@ class KotlinTreeSitterParser(TreeSitterParser):
 
 
     def __init__(self) -> None:
-        self._language: Optional["TSLanguage"] = None
+        self._language: TSLanguage | None = None
         self._current_source: bytes = b""
 
-    def parse(self, source: bytes) -> "Tree":
+    def parse(self, source: bytes) -> Tree:
         """Parse source bytes into a tree-sitter Tree, storing source for extraction."""
         from tree_sitter import Parser
 
@@ -258,7 +149,7 @@ class KotlinTreeSitterParser(TreeSitterParser):
     # Utilities
     # ------------------------------------------------------------------------
 
-    def _fq_with_type(self, sym_type: SymType, name: str, parent: Optional[str] = None) -> str:
+    def _fq_with_type(self, sym_type: SymType, name: str, parent: str | None = None) -> str:
         """Build a fully-qualified name with type prefix.
 
         parent_fqn may already have a type prefix (from tree-sitter results).
@@ -276,7 +167,7 @@ class KotlinTreeSitterParser(TreeSitterParser):
     # Package
     # ------------------------------------------------------------------------
 
-    def extract_package(self, tree: "Tree", source: bytes) -> Optional[str]:
+    def extract_package(self, tree: Tree, source: bytes) -> str | None:
         """Extract the package declaration from the file, if any."""
         root = tree.root_node
         for child in root.children:
@@ -290,7 +181,7 @@ class KotlinTreeSitterParser(TreeSitterParser):
 
     def extract_imports(
         self,
-        tree: "Tree",
+        tree: Tree,
         file_path: str,
     ) -> list[RawImport]:
         """
@@ -339,7 +230,7 @@ class KotlinTreeSitterParser(TreeSitterParser):
 
     def extract_symbols(
         self,
-        tree: "Tree",
+        tree: Tree,
         file_path: str,
     ) -> list[RawSymbol]:
         """
@@ -362,7 +253,7 @@ class KotlinTreeSitterParser(TreeSitterParser):
         source: bytes,
         file_path: str,
         symbols: list[RawSymbol],
-        parent_fqn: Optional[str],
+        parent_fqn: str | None,
     ) -> None:
         """
         Recursively walk the tree and extract symbol definitions.
@@ -424,7 +315,7 @@ class KotlinTreeSitterParser(TreeSitterParser):
         source: bytes,
         file_path: str,
         symbols: list[RawSymbol],
-        parent_fqn: Optional[str],
+        parent_fqn: str | None,
     ) -> None:
         """Extract a class/interface/object/annotation class and its members."""
         # Map all type declarations to CLASS for backward compatibility
@@ -471,7 +362,7 @@ class KotlinTreeSitterParser(TreeSitterParser):
         source: bytes,
         file_path: str,
         symbols: list[RawSymbol],
-        parent_fqn: Optional[str],
+        parent_fqn: str | None,
     ) -> None:
         """Extract a function or property declaration as a member symbol."""
         if node.type == "function_declaration":
@@ -485,7 +376,7 @@ class KotlinTreeSitterParser(TreeSitterParser):
         source: bytes,
         file_path: str,
         symbols: list[RawSymbol],
-        parent_fqn: Optional[str],
+        parent_fqn: str | None,
     ) -> None:
         """Extract a function (or extension function) declaration."""
         # Check for modifiers (private, internal, etc.)
@@ -494,7 +385,7 @@ class KotlinTreeSitterParser(TreeSitterParser):
         # Determine if this is an extension function: receiver type before function name
         # Pattern: (type_identifier | user_type) + "fun"  → extension function
         is_extension = False
-        receiver_type: Optional[str] = None
+        receiver_type: str | None = None
         children = node.children
         for i, child in enumerate(children):
             if child.type in ("type_identifier", "user_type"):
@@ -551,7 +442,7 @@ class KotlinTreeSitterParser(TreeSitterParser):
         source: bytes,
         file_path: str,
         symbols: list[RawSymbol],
-        parent_fqn: Optional[str],
+        parent_fqn: str | None,
     ) -> None:
         """Extract a property (val/var) declaration."""
         visibility = self._visibility_from_modifiers(node, source)
@@ -603,7 +494,7 @@ class KotlinTreeSitterParser(TreeSitterParser):
 
     def extract_calls(
         self,
-        tree: "Tree",
+        tree: Tree,
         file_path: str,
     ) -> list[RawCall]:
         """Extract call sites from the Kotlin tree (not yet implemented)."""
@@ -631,8 +522,8 @@ class KotlinScanner(BaseScanner):
     KOTLIN_SUFFIXES = frozenset({".kt", ".kts"})
 
     def __init__(self) -> None:
-        self._resolver: Optional[PathResolver] = None
-        self._project_root: Optional[Path] = None
+        self._resolver: PathResolver | None = None
+        self._project_root: Path | None = None
 
     # ------------------------------------------------------------------------
     # PathResolver / parser plumbing (redesign spec)
@@ -660,7 +551,7 @@ class KotlinScanner(BaseScanner):
         self,
         file_path: Path,
         project_root: Path,
-        file_index: dict[str, Path] = {},
+        file_index: dict[str, Path] | None = None,
     ) -> ScanResult:
         self._project_root = project_root
         self._resolver = PathResolver(project_root, file_index)
@@ -823,7 +714,7 @@ class KotlinScanner(BaseScanner):
     # parse_file (redesign spec: public API for orchestrator)
     # ------------------------------------------------------------------------
 
-    def parse_file(self, file_path: Path) -> "Tree":
+    def parse_file(self, file_path: Path) -> Tree:
         """
         Parse a Kotlin file and return the tree-sitter Tree.
 
@@ -837,7 +728,7 @@ class KotlinScanner(BaseScanner):
 # Module-level parser singleton (lazy; constructed once)
 # ---------------------------------------------------------------------------
 
-_KOTLIN_PARSER: Optional[KotlinTreeSitterParser] = None
+_KOTLIN_PARSER: KotlinTreeSitterParser | None = None
 
 
 def _get_parser() -> KotlinTreeSitterParser:

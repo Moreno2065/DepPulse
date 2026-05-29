@@ -210,6 +210,10 @@ class PathResolver:
         candidates = [
             path_segments + ext,
             path_segments + "/__init__" + ext,
+            "src/main/java/" + path_segments + ext,
+            "src/main/kotlin/" + path_segments + ext,
+            "src/test/java/" + path_segments + ext,
+            "src/test/kotlin/" + path_segments + ext,
         ]
 
         for candidate in candidates:
@@ -462,14 +466,15 @@ class PathResolver:
             if not isinstance(targets, list):
                 targets = [targets]
 
-            # Wildcard alias: "utils/*" → ["src/utils/*"]
+            # Wildcard alias: "@utils/*" -> ["src/utils/*"]
             if pattern.endswith("/*"):
-                prefix = pattern[:-2]  # e.g. "utils"
-                suffix = alias[len(prefix):].lstrip("/")  # remainder after the alias prefix
-                for target in targets:
-                    base = target.rstrip("/")  # e.g. "src/utils"
-                    candidate = f"{base}/{suffix}"
-                    candidates.extend(self._candidates_with_extensions(candidate))
+                prefix = pattern[:-2]  # e.g. "@utils"
+                if alias.startswith(prefix):
+                    suffix = alias[len(prefix):].lstrip("/")  # remainder after the alias prefix
+                    for target in targets:
+                        base = target.rstrip("/").replace("/*", "")  # e.g. "src/utils"
+                        candidate = f"{base}/{suffix}"
+                        candidates.extend(self._candidates_with_extensions(candidate))
 
             # Exact alias: "@utils" → ["src/utils/index"]
             elif alias == pattern or alias.startswith(pattern + "/"):

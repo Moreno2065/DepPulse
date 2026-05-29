@@ -2,8 +2,6 @@
 
 from pathlib import Path
 
-import pytest
-
 from deppulse.config import DepPulseConfig
 from deppulse.core.orchestrator import DependencyOrchestrator
 
@@ -16,10 +14,10 @@ class TestIncrementalScan:
 
         config = DepPulseConfig(project_root=tmp_path)
         orchestrator = DependencyOrchestrator(config=config, use_cache=False)
-        result = orchestrator.scan(tmp_path)
+        scan_result = orchestrator.scan(tmp_path)
 
-        assert result.total_files_found >= 2
-        assert result.stats.python_files >= 2
+        assert scan_result.total_files_found >= 2
+        assert scan_result.stats.python_files >= 2
 
     def test_cache_survives_scan(self, tmp_path: Path):
         """Cache is written after a scan."""

@@ -14,7 +14,6 @@ from __future__ import annotations
 import fnmatch
 import os
 from pathlib import Path
-from typing import Optional
 
 import networkx as nx
 
@@ -45,9 +44,9 @@ class TestSelector:
         self,
         changed_files: list[str],
         max_blast: int = 50,
-        changed_symbols: Optional[list[ChangedSymbol]] = None,
-        diff_output: Optional[str] = None,
-        project_root: Optional[Path] = None,
+        changed_symbols: list[ChangedSymbol] | None = None,
+        diff_output: str | None = None,
+        project_root: Path | None = None,
     ) -> TestSelectionResult:
         """
         Select tests based on changed files and symbols.
@@ -306,7 +305,7 @@ class TestSelector:
 
         return result
 
-    def _find_file_for_symbol(self, sym: ChangedSymbol) -> Optional[str]:
+    def _find_file_for_symbol(self, sym: ChangedSymbol) -> str | None:
         """Find the file containing a changed symbol (usually just the file_path)."""
         return sym.file_path
 
@@ -336,7 +335,7 @@ class TestSelector:
         return tests
 
 
-def convention_test_path(source_path: str) -> Optional[str]:
+def convention_test_path(source_path: str) -> str | None:
     """
     Map a source file path to its conventional test file path.
 

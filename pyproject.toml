@@ -71,6 +71,7 @@ ignore = ["E501"]
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]
+"tests/fixtures/python_project/broken_syntax.py" = ["E999"]
 
 [tool.mypy]
 python_version = "3.10"

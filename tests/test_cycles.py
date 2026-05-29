@@ -1,14 +1,12 @@
 """Tests for the cycle detection module."""
 
-import pytest
 from pathlib import Path
 
 import networkx as nx
 
-from deppulse.core.cycles import find_cycles, _canonical_cycle, _assess_severity
+from deppulse.core.cycles import _assess_severity, _canonical_cycle, find_cycles
 from deppulse.core.orchestrator import DependencyOrchestrator
 from deppulse.models import CycleSeverity
-
 
 FIXTURE_ROOT = Path(__file__).parent / "fixtures" / "python_project"
 
@@ -28,57 +26,57 @@ class TestCanonicalCycle:
 
 class TestCycleDetection:
     def test_empty_graph_no_cycles(self):
-        G = nx.DiGraph()
-        report = find_cycles(G)
+        graph = nx.DiGraph()
+        report = find_cycles(graph)
         assert report.cycle_count == 0
         assert report.severity == CycleSeverity.NONE
         assert report.cycles == []
 
     def test_linear_graph_no_cycles(self):
-        G = nx.DiGraph()
-        G.add_edges_from([("a", "b"), ("b", "c"), ("c", "d")])
-        report = find_cycles(G)
+        graph = nx.DiGraph()
+        graph.add_edges_from([("a", "b"), ("b", "c"), ("c", "d")])
+        report = find_cycles(graph)
         assert report.cycle_count == 0
 
     def test_simple_cycle_detected(self):
-        G = nx.DiGraph()
-        G.add_edges_from([("a", "b"), ("b", "c"), ("c", "a")])
-        report = find_cycles(G)
+        graph = nx.DiGraph()
+        graph.add_edges_from([("a", "b"), ("b", "c"), ("c", "a")])
+        report = find_cycles(graph)
         assert report.cycle_count >= 1
         assert report.severity != CycleSeverity.NONE
 
     def test_multiple_cycles(self):
-        G = nx.DiGraph()
-        G.add_edges_from([
+        graph = nx.DiGraph()
+        graph.add_edges_from([
             ("a", "b"), ("b", "c"), ("c", "a"),  # cycle 1
             ("x", "y"), ("y", "z"), ("z", "x"),  # cycle 2
         ])
-        report = find_cycles(G)
+        report = find_cycles(graph)
         assert report.cycle_count >= 2
 
     def test_severity_none_when_no_cycles(self):
-        G = nx.DiGraph()
-        G.add_edges_from([("a", "b")])
-        report = find_cycles(G)
+        graph = nx.DiGraph()
+        graph.add_edges_from([("a", "b")])
+        report = find_cycles(graph)
         assert report.severity == CycleSeverity.NONE
 
     def test_fixture_project_cycles(self):
         """The cycle_a.py, cycle_b.py fixture should produce at least one cycle."""
         orchestrator = DependencyOrchestrator(use_cache=False)
         result = orchestrator.scan(FIXTURE_ROOT)
-        G = _build_graph(result)
+        graph = _build_graph(result)
 
         # Check if cycle files exist in the graph
-        has_cycle_files = "cycle_a.py" in G.nodes() and "cycle_b.py" in G.nodes()
+        has_cycle_files = "cycle_a.py" in graph.nodes() and "cycle_b.py" in graph.nodes()
         if has_cycle_files:
-            report = find_cycles(G)
+            report = find_cycles(graph)
             # Should detect at least one cycle
             assert report.cycle_count >= 1
 
     def test_top_participants(self):
-        G = nx.DiGraph()
-        G.add_edges_from([("a", "b"), ("b", "c"), ("c", "a"), ("a", "d")])
-        report = find_cycles(G)
+        graph = nx.DiGraph()
+        graph.add_edges_from([("a", "b"), ("b", "c"), ("c", "a"), ("a", "d")])
+        report = find_cycles(graph)
         assert len(report.top_cycle_participants) > 0
         # "a" participates in the cycle
         participant_paths = {p for p, _ in report.top_cycle_participants}
@@ -101,9 +99,10 @@ class TestCycleAssessment:
 
 def _build_graph(result):
     import networkx as nx
+
     from deppulse.models import Language, NodeMetadata
 
-    G = nx.DiGraph()
+    graph = nx.DiGraph()
     for scan_result in result.scan_results:
         if scan_result.error and not scan_result.resolved_dependencies:
             continue
@@ -116,13 +115,13 @@ def _build_graph(result):
             unresolved_count=len(scan_result.unresolved_dependencies),
             external_count=len(scan_result.external_dependencies),
         )
-        G.add_node(scan_result.file_path, **vars(meta))
+        graph.add_node(scan_result.file_path, **vars(meta))
 
     for scan_result in result.scan_results:
         for resolved in scan_result.internal_dependencies:
             if resolved.normalized_path is None:
                 continue
-            if resolved.normalized_path not in G:
+            if resolved.normalized_path not in graph:
                 ghost = NodeMetadata(
                     path=resolved.normalized_path,
                     language=Language.UNKNOWN,
@@ -132,7 +131,7 @@ def _build_graph(result):
                     unresolved_count=0,
                     external_count=0,
                 )
-                G.add_node(resolved.normalized_path, **vars(ghost))
-            G.add_edge(scan_result.file_path, resolved.normalized_path)
+                graph.add_node(resolved.normalized_path, **vars(ghost))
+            graph.add_edge(scan_result.file_path, resolved.normalized_path)
 
-    return G
+    return graph

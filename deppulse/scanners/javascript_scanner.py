@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 from deppulse.core.path_resolver import PathResolver
 from deppulse.core.tree_sitter_parser import TreeSitterParser
@@ -19,7 +19,8 @@ from deppulse.models import (
 from deppulse.scanners.base import BaseScanner
 
 if TYPE_CHECKING:
-    from tree_sitter import Language as TSLanguage, Tree
+    from tree_sitter import Language as TSLanguage
+    from tree_sitter import Tree
 
 
 # ---------------------------------------------------------------------------
@@ -47,7 +48,7 @@ class JavaScriptTreeSitterParser(TreeSitterParser):
     language_name = "javascript"
 
     @property
-    def language(self) -> "TSLanguage":
+    def language(self) -> TSLanguage:
         import tree_sitter_javascript
         from tree_sitter import Language
 
@@ -60,7 +61,7 @@ class JavaScriptTreeSitterParser(TreeSitterParser):
 
     def extract_imports(
         self,
-        tree: "Tree",
+        tree: Tree,
         file_path: str,
     ) -> list[RawDependency]:
         from deppulse.models import RawDependency
@@ -102,7 +103,7 @@ class JavaScriptTreeSitterParser(TreeSitterParser):
 
     def extract_symbols(
         self,
-        tree: "Tree",
+        tree: Tree,
         file_path: str,
     ) -> list[ExtractedSymbol]:
         from deppulse.models import ExtractedSymbol
@@ -142,7 +143,7 @@ class JavaScriptTreeSitterParser(TreeSitterParser):
 
     def extract_calls(
         self,
-        tree: "Tree",
+        tree: Tree,
         file_path: str,
     ) -> list:
         # Collected via extract_imports for now; call graph construction
@@ -180,8 +181,8 @@ class JavaScriptScanner(BaseScanner):
     name = "javascript"
 
     def __init__(self) -> None:
-        self._parser: Optional[JavaScriptTreeSitterParser] = None
-        self._resolver: Optional[PathResolver] = None
+        self._parser: JavaScriptTreeSitterParser | None = None
+        self._resolver: PathResolver | None = None
 
     # ------------------------------------------------------------------------
     # BaseScanner contract
@@ -195,7 +196,7 @@ class JavaScriptScanner(BaseScanner):
         self,
         file_path: Path,
         project_root: Path,
-        file_index: dict[str, Path] = {},
+        file_index: dict[str, Path] | None = None,
     ) -> ScanResult:
         """
         Scan a single JavaScript file and return a ``ScanResult``.
@@ -381,7 +382,7 @@ class JavaScriptScanner(BaseScanner):
     # Specifier extraction helpers
     # ------------------------------------------------------------------------
 
-    def _extract_module_specifier(self, imp_node, source: bytes) -> Optional[str]:
+    def _extract_module_specifier(self, imp_node, source: bytes) -> str | None:
         """
         Extract the module specifier string from an ``import`` statement node.
 

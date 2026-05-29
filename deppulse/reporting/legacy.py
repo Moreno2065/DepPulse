@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
 
 import networkx as nx
 
@@ -19,7 +18,6 @@ from deppulse.models import (
     TopFileEntry,
 )
 
-
 # ---------------------------------------------------------------------------
 # Report assembly
 # ---------------------------------------------------------------------------
@@ -28,28 +26,26 @@ from deppulse.models import (
 def assemble_audit_report(
     graph_result: GraphBuildResult,
     graph: nx.DiGraph,
-    cycle_report: Optional[CycleReport] = None,
-    impact_report: Optional[ImpactReport] = None,
-    risk_report: Optional[RiskReport] = None,
+    cycle_report: CycleReport | None = None,
+    impact_report: ImpactReport | None = None,
+    risk_report: RiskReport | None = None,
     scan_duration: float = 0.0,
 ) -> AuditReport:
     """
     Assemble a comprehensive AuditReport from all available data.
     """
-    G = graph
-
     # Top depended-on files (files that others depend on the most = in-degree)
-    in_degrees = [(n, G.in_degree(n)) for n in G.nodes()]
+    in_degrees = [(n, graph.in_degree(n)) for n in graph.nodes()]
     top_depended = [
-        TopFileEntry(path=n, count=d, language=G.nodes[n].get("language", "unknown"))
+        TopFileEntry(path=n, count=d, language=graph.nodes[n].get("language", "unknown"))
         for n, d in sorted(in_degrees, key=lambda x: -x[1])[:10]
         if d > 0
     ]
 
     # Top files with most outgoing dependencies (out-degree)
-    out_degrees = [(n, G.out_degree(n)) for n in G.nodes()]
+    out_degrees = [(n, graph.out_degree(n)) for n in graph.nodes()]
     top_outgoing = [
-        TopFileEntry(path=n, count=d, language=G.nodes[n].get("language", "unknown"))
+        TopFileEntry(path=n, count=d, language=graph.nodes[n].get("language", "unknown"))
         for n, d in sorted(out_degrees, key=lambda x: -x[1])[:10]
         if d > 0
     ]
@@ -162,7 +158,7 @@ def _graph_stats_to_dict(stats: GraphStats) -> dict:
     }
 
 
-def _cycle_report_to_dict(report: Optional[CycleReport]) -> Optional[dict]:
+def _cycle_report_to_dict(report: CycleReport | None) -> dict | None:
     if report is None:
         return None
     return {
@@ -191,7 +187,7 @@ def audit_report_to_markdown(report: AuditReport) -> str:
     suitable for PR review or documentation.
     """
     lines: list[str] = []
-    lines.append(f"# DepPulse Audit Report")
+    lines.append("# DepPulse Audit Report")
     lines.append("")
     lines.append(f"**Project:** `{report.project_path}`")
     lines.append(f"**Generated:** {report.generated_at.strftime('%Y-%m-%d %H:%M:%S')}")

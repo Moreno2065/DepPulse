@@ -1,7 +1,6 @@
 """API client for python_project fixture."""
 
 from typing import Any
-import json as _json
 
 
 class ApiClient:

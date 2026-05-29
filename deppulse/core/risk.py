@@ -19,14 +19,14 @@ All weights are configurable via `RiskWeights` and can be loaded from
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import PurePosixPath
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 import networkx as nx
 
 from deppulse.core.diff_parser import ChangedSymbol, DiffParser
-from deppulse.core.hotspot_analyzer import FileHotspotData, HotspotAnalyzer, HotspotReport
+from deppulse.core.hotspot_analyzer import FileHotspotData, HotspotAnalyzer
 from deppulse.models import RiskComponent, RiskLevel, RiskReport
 
 if TYPE_CHECKING:
@@ -99,7 +99,7 @@ class RiskWeights:
         }
 
     @classmethod
-    def from_dict(cls, d: dict) -> "RiskWeights":
+    def from_dict(cls, d: dict) -> RiskWeights:
         """Deserialize weights from a dict."""
         return cls(**{k: v for k, v in d.items() if k in {f.name for f in cls.__dataclass_fields__.values()}})
 
@@ -122,10 +122,10 @@ def compute_risk_score(
     blast_radius_percent: float,
     cycle_count: int = 0,
     cycle_files: int = 0,
-    changed_symbols: Optional[list[ChangedSymbol]] = None,
-    hotspot_data: Optional[dict[str, FileHotspotData]] = None,
-    weights: Optional[RiskWeights] = None,
-    changed_line_count: Optional[int] = None,
+    changed_symbols: list[ChangedSymbol] | None = None,
+    hotspot_data: dict[str, FileHotspotData] | None = None,
+    weights: RiskWeights | None = None,
+    changed_line_count: int | None = None,
 ) -> RiskReport:
     """
     Compute a transparent, explainable risk score (0-100) for one or more files.
@@ -282,8 +282,8 @@ def _factor_impact_radius(
 
 def _factor_change_nature(
     involved_files: list[str],
-    changed_symbols: Optional[list[ChangedSymbol]],
-    changed_line_count: Optional[int],
+    changed_symbols: list[ChangedSymbol] | None,
+    changed_line_count: int | None,
     weights: RiskWeights,
 ) -> tuple[list[RiskComponent], float]:
     """
@@ -400,7 +400,7 @@ def _factor_change_nature(
 
 def _factor_historical_hotspot(
     involved_files: list[str],
-    hotspot_data: Optional[dict[str, FileHotspotData]],
+    hotspot_data: dict[str, FileHotspotData] | None,
     weights: RiskWeights,
 ) -> tuple[list[RiskComponent], float]:
     """Historical Hotspot: based on git history analysis."""
@@ -577,10 +577,10 @@ def compute_risk_from_git_diff(
     graph: nx.DiGraph,
     involved_files: list[str],
     blast_radius_percent: float,
-    project_root: "Path",
+    project_root: Path,
     cycle_count: int = 0,
     cycle_files: int = 0,
-    weights: Optional[RiskWeights] = None,
+    weights: RiskWeights | None = None,
 ) -> RiskReport:
     """
     Convenience function: compute risk score using git diff for symbol-level analysis.
@@ -589,7 +589,6 @@ def compute_risk_from_git_diff(
     the full 4-factor risk assessment from a git diff.
     """
     # Parse diff for changed symbols
-    from deppulse.core.diff_parser import DiffParser
     diff_parser = DiffParser(project_root=project_root)
     diff_output = _run_git_diff(project_root)
     file_diffs = diff_parser.parse(diff_output)
@@ -620,7 +619,7 @@ def compute_risk_from_git_diff(
     )
 
 
-def _run_git_diff(project_root: "Path") -> str:
+def _run_git_diff(project_root: Path) -> str:
     """Run git diff --unified=0 and return output."""
     import subprocess
     try:

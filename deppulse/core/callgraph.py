@@ -7,11 +7,11 @@ individual symbols (functions, methods, classes) with directed call edges.
 from __future__ import annotations
 
 import ast
+import re
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
 
 from deppulse.models import (
     CallGraphResult,
@@ -23,7 +23,6 @@ from deppulse.models import (
     SymbolCall,
     SymbolType,
 )
-
 
 # ---------------------------------------------------------------------------
 # Symbol building helpers
@@ -92,7 +91,7 @@ class _PyCallVisitor(ast.NodeVisitor):
         self.local_names = local_names
         self.calls: list[str] = []  # simple names of called functions
 
-    def visit_Call(self, node: ast.Call) -> None:
+    def visit_call(self, node: ast.Call) -> None:
         # Get the callable name
         if isinstance(node.func, ast.Name):
             self.calls.append(node.func.id)
@@ -100,15 +99,15 @@ class _PyCallVisitor(ast.NodeVisitor):
             self.calls.append(node.func.attr)
         self.generic_visit(node)
 
-    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+    def visit_functiondef(self, node: ast.FunctionDef) -> None:
         self.local_names.add(node.name)
         self.generic_visit(node)
 
-    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
+    def visit_asyncfunctiondef(self, node: ast.AsyncFunctionDef) -> None:
         self.local_names.add(node.name)
         self.generic_visit(node)
 
-    def visit_ClassDef(self, node: ast.ClassDef) -> None:
+    def visit_classdef(self, node: ast.ClassDef) -> None:
         self.local_names.add(node.name)
         self.generic_visit(node)
 
@@ -127,7 +126,6 @@ def _resolve_python_calls(
     content = ""
 
     try:
-        from pathlib import Path as _Path
 
         abs_path = Path(scan_result.absolute_path)
         if abs_path.exists():
@@ -192,9 +190,6 @@ def _resolve_python_calls(
 # ---------------------------------------------------------------------------
 # Java/Kotlin call resolver (approximate via regex)
 # ---------------------------------------------------------------------------
-
-
-import re
 
 _RE_JAVA_METHOD_CALL = re.compile(
     r"\b([A-Z][a-zA-Z0-9_]*)\.([a-z][a-zA-Z0-9_]*)\s*\(",

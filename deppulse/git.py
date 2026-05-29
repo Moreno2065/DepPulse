@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-import subprocess
 import os
+import subprocess
 from pathlib import Path
-from typing import Optional
 
 
 class GitError(Exception):
@@ -64,7 +63,7 @@ def _run_git(
 def get_changed_files(
     project_root: Path,
     staged: bool = False,
-    ref: Optional[str] = None,
+    ref: str | None = None,
 ) -> list[str]:
     """
     Return a list of changed file paths (project-relative) using git.
@@ -128,10 +127,10 @@ def get_git_status_summary(project_root: Path) -> dict[str, str]:
         branch = _run_git(project_root, ["branch", "--show-current"], check=False)
         status = _run_git(project_root, ["status", "--porcelain"], check=False)
 
-        lines = [l for l in status.splitlines() if l.strip()]
-        staged = sum(1 for l in lines if l[0] in "MADRC")
-        unstaged = sum(1 for l in lines if l[1] in "MDRC")
-        untracked = sum(1 for l in lines if l.startswith("??"))
+        lines = [line for line in status.splitlines() if line.strip()]
+        staged = sum(1 for line in lines if line[0] in "MADRC")
+        unstaged = sum(1 for line in lines if line[1] in "MDRC")
+        untracked = sum(1 for line in lines if line.startswith("??"))
 
         return {
             "branch": branch or "(detached)",

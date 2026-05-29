@@ -6,14 +6,13 @@ for accurate, syntax-aware extraction of includes, declarations, and symbols.
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import tree_sitter_cpp
 
 from deppulse.core.ir import (
     ImportKind,
-    LineRange,
     RawImport,
     RawSymbol,
     SymType,
@@ -25,39 +24,19 @@ from deppulse.models import (
     DependencyKind,
     ExtractedSymbol,
     Language,
-    normalize_path_to_posix,
     RawDependency,
     ResolvedDependency,
     ScanResult,
+    normalize_path_to_posix,
 )
 from deppulse.scanners.base import BaseScanner
-from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
-    from tree_sitter import Language as TSLanguage, Tree
+    from tree_sitter import Language as TSLanguage
+    from tree_sitter import Tree
 
 # Supported C/C++ file extensions.
 CPP_EXTENSIONS = frozenset({".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx"})
-
-# Regex: matches #include "..." or #include <...>, optionally with a space after hash.
-_RE_INCLUDE = re.compile(
-    r"^[ \t]*#[ \t]*include[ \t]*([<\"][^>\"жа]+[>\"])",
-    re.MULTILINE,
-)
-
-# Regex: removes // single-line comments.
-_RE_SINGLELINE_COMMENT = re.compile(r"//.*$", re.MULTILINE)
-
-# Regex: removes /* ... */ block comments (non-nested).
-_RE_BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.DOTALL)
-
-
-def _strip_comments(text: str) -> str:
-    """Remove C++ // and /* */ comments from source text (used by tests)."""
-    text = _RE_SINGLELINE_COMMENT.sub("", text)
-    text = _RE_BLOCK_COMMENT.sub("", text)
-    return text
-
 
 # ---------------------------------------------------------------------------
 # CppTreeSitterParser
@@ -79,10 +58,10 @@ class CppTreeSitterParser(TreeSitterParser):
 
     def __init__(self) -> None:
         self._current_source: bytes = b""
-        self._language: Optional["TSLanguage"] = None
+        self._language: TSLanguage | None = None
 
     @property
-    def language(self) -> "TSLanguage":
+    def language(self) -> TSLanguage:
         """Return the tree-sitter Language object for C++, wrapping the PyCapsule."""
         if self._language is None:
             from tree_sitter import Language
@@ -97,7 +76,7 @@ class CppTreeSitterParser(TreeSitterParser):
 
     def _run_query(
         self,
-        tree: "Tree",
+        tree: Tree,
         source: bytes,
         pattern: str,
     ) -> list[tuple[int, int, bytes]]:
@@ -113,13 +92,13 @@ class CppTreeSitterParser(TreeSitterParser):
         except Exception:
             return []
         captures: list[tuple[int, int, bytes]] = []
-        for pattern_index, _ in enumerate(query.patterns):
+        for _pattern_index, _ in enumerate(query.patterns):
             pass  # validate patterns compile
         for capture_id, node in query.captures(tree.root_node):
             captures.append((capture_id, node.byte_range[0], node.byte_range[1]))
         return captures
 
-    def query(self, tree: "Tree", pattern: str) -> list:
+    def query(self, tree: Tree, pattern: str) -> list:
         """Override to use actual tree-sitter query execution."""
         return self._run_query(tree, b"", pattern)
 
@@ -129,9 +108,9 @@ class CppTreeSitterParser(TreeSitterParser):
 
     def extract_imports(
         self,
-        tree: "Tree",
+        tree: Tree,
         file_path: str,
-        source: Optional[bytes] = None,
+        source: bytes | None = None,
     ) -> list[RawImport]:
         """
         Extract all #include directives from a C++ file using tree-sitter.
@@ -176,7 +155,7 @@ class CppTreeSitterParser(TreeSitterParser):
         self,
         node,
         source: bytes,
-    ) -> tuple[ImportKind, Optional[str], str]:
+    ) -> tuple[ImportKind, str | None, str]:
         """
         Inspect a preproc_include node and return (ImportKind, specifier, raw_text).
 
@@ -187,7 +166,7 @@ class CppTreeSitterParser(TreeSitterParser):
         raw_text = raw_bytes.decode("utf-8", errors="replace").strip()
 
         is_quoted = False
-        path_text: Optional[str] = None
+        path_text: str | None = None
 
         for child in node.children:
             child_type = child.type
@@ -231,9 +210,9 @@ class CppTreeSitterParser(TreeSitterParser):
 
     def extract_symbols(
         self,
-        tree: "Tree",
+        tree: Tree,
         file_path: str,
-        source: Optional[bytes] = None,
+        source: bytes | None = None,
     ) -> list[RawSymbol]:
         """
         Extract class, struct, and function symbol definitions from a C++ file.
@@ -274,7 +253,7 @@ class CppTreeSitterParser(TreeSitterParser):
         node,
         source: bytes,
         file_path: str,
-    ) -> Optional[RawSymbol]:
+    ) -> RawSymbol | None:
         """Extract a class or struct symbol from its class_specifier node."""
         name_node = self._find_child_by_type(node, "type_identifier") or \
                     self._find_child_by_type(node, "identifier")
@@ -308,7 +287,7 @@ class CppTreeSitterParser(TreeSitterParser):
         node,
         source: bytes,
         file_path: str,
-    ) -> Optional[RawSymbol]:
+    ) -> RawSymbol | None:
         """Extract a function symbol from its function_definition node."""
         # Look for function_declarator > identifier or field_identifier
         declarator = self._find_child_by_type(node, "function_declarator")
@@ -342,11 +321,11 @@ class CppTreeSitterParser(TreeSitterParser):
     # Internal helpers
     # ------------------------------------------------------------------------
 
-    def _get_source(self, tree: "Tree") -> bytes:
+    def _get_source(self, tree: Tree) -> bytes:
         """Return the source bytes from the parser's current source buffer."""
         return self._current_source
 
-    def parse(self, source: bytes) -> "Tree":
+    def parse(self, source: bytes) -> Tree:
         """
         Parse source bytes into a tree-sitter Tree.
 
@@ -359,7 +338,7 @@ class CppTreeSitterParser(TreeSitterParser):
         parser = Parser(self.language)
         return parser.parse(source)
 
-    def parse_file(self, file_path: Path) -> "Tree":
+    def parse_file(self, file_path: Path) -> Tree:
         """Parse a C++ file from disk."""
         content = file_path.read_bytes()
         return self.parse(content)
@@ -393,8 +372,8 @@ class CppScanner(BaseScanner):
 
     def __init__(
         self,
-        project_root: Optional[Path] = None,
-        file_index: Optional[dict[str, Path]] = None,
+        project_root: Path | None = None,
+        file_index: dict[str, Path] | None = None,
     ) -> None:
         self._parser = CppTreeSitterParser()
         self._resolver = PathResolver(
@@ -424,7 +403,7 @@ class CppScanner(BaseScanner):
         self,
         file_path: Path,
         project_root: Path,
-        file_index: dict[str, Path] = {},
+        file_index: dict[str, Path] | None = None,
     ) -> ScanResult:
         """
         Scan a C++ source file and return a ``ScanResult``.
@@ -437,7 +416,6 @@ class CppScanner(BaseScanner):
 
         size_bytes = 0
         content_bytes = b""
-        error_msg: Optional[str] = None
 
         try:
             size_bytes = file_path.stat().st_size
@@ -511,7 +489,7 @@ class CppScanner(BaseScanner):
 
     # -- Parsing / resolution helpers ---------------------------------------
 
-    def parse_file(self, file_path: Path) -> "Tree":
+    def parse_file(self, file_path: Path) -> Tree:
         """Parse a C++ file and return the tree-sitter Tree."""
         return self._parser.parse_file(file_path)
 

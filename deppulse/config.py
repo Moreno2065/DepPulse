@@ -8,8 +8,7 @@ import os
 import warnings
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
-from typing import Any, Optional
-
+from typing import Any
 
 # ---------------------------------------------------------------------------
 # Default configuration values
@@ -117,17 +116,17 @@ class DepPulseConfig:
     test_patterns: frozenset[str] = field(default_factory=lambda: DEFAULT_TEST_PATTERNS.copy())
     test_dirs: frozenset[str] = field(default_factory=lambda: DEFAULT_TEST_DIRS.copy())
     hotspot_cache_path: Path = field(init=False)
-    risk_weights: "RiskWeights | None" = field(default=None, init=False)
+    risk_weights: Any = field(default=None, init=False)
 
     # Internally tracked
-    _config_file: Optional[Path] = field(default=None, init=False, repr=False)
+    _config_file: Path | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
         self.cache_dir = self.project_root / ".deppulse"
         self.hotspot_cache_path = self.project_root / ".deppulse" / "hotspot-cache.json"
 
     @classmethod
-    def from_path(cls, project_root: Path) -> "DepPulseConfig":
+    def from_path(cls, project_root: Path) -> DepPulseConfig:
         """
         Load configuration from a deppulse.json file at project_root,
         or return defaults.
@@ -142,7 +141,7 @@ class DepPulseConfig:
         try:
             data: dict[str, Any] = json.loads(config_file.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
-            warnings.warn(f"Failed to parse {config_file}, using defaults.")
+            warnings.warn(f"Failed to parse {config_file}, using defaults.", stacklevel=2)
             return instance
 
         risk = data.get("risk", {})
@@ -182,30 +181,18 @@ class DepPulseConfig:
 
     def should_ignore_dir(self, name: str) -> bool:
         """Return True if a directory should be skipped during scanning."""
-        if name in self.ignore_dirs:
-            return True
-        for pattern in self.ignore_dirs:
-            if fnmatch.fnmatch(name, pattern):
-                return True
-        return False
+        return any(fnmatch.fnmatch(name, pattern) for pattern in self.ignore_dirs)
 
     def should_ignore_file(self, name: str) -> bool:
         """Return True if a file should be skipped during scanning."""
-        for pattern in self.ignore_files:
-            if fnmatch.fnmatch(name, pattern):
-                return True
-        return False
+        return any(fnmatch.fnmatch(name, pattern) for pattern in self.ignore_files)
 
     def is_test_file(self, path: str) -> bool:
         """Return True if `path` matches any test pattern or is inside a test directory."""
         name = os.path.basename(path)
         # Strategy 1: filename pattern
-        for pattern in self.test_patterns:
-            if fnmatch.fnmatch(name, pattern):
-                return True
+        if any(fnmatch.fnmatch(name, pattern) for pattern in self.test_patterns):
+            return True
         # Strategy 2: in a test directory
         parts = PurePosixPath(path.replace("\\", "/")).parts
-        for part in parts:
-            if part in self.test_dirs:
-                return True
-        return False
+        return any(part in self.test_dirs for part in parts)

@@ -1,6 +1,6 @@
 """Utility package."""
 
-from .math_utils import add
 from .config import VERSION
+from .math_utils import add
 
 __all__ = ["add", "VERSION"]

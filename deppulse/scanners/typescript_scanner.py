@@ -6,16 +6,15 @@ from TypeScript (.ts) and TSX (.tsx) files. Skips .d.ts declaration files.
 
 from __future__ import annotations
 
+import contextlib
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 from deppulse.core.ir import (
     ImportKind,
-    LineRange,
     RawImport,
     RawSymbol,
     SymType,
-    Visibility,
 )
 from deppulse.core.path_resolver import PathResolver
 from deppulse.core.tree_sitter_parser import TreeSitterParser
@@ -31,7 +30,8 @@ from deppulse.models import (
 from deppulse.scanners.base import BaseScanner
 
 if TYPE_CHECKING:
-    from tree_sitter import Language as TSLanguage, Tree
+    from tree_sitter import Language as TSLanguage
+    from tree_sitter import Tree
 
 
 _TS_SUFFIXES = frozenset({".ts", ".tsx"})
@@ -49,15 +49,15 @@ class TypeScriptTreeSitterParser(TreeSitterParser):
     language_name = "typescript"
 
     @property
-    def language(self) -> "TSLanguage":
+    def language(self) -> TSLanguage:
         import tree_sitter_typescript as _ts
         from tree_sitter import Language
 
         # tree-sitter-typescript exposes language_ts and language_tsx
         # Try typescript first; if unavailable fall back to any available
-        if hasattr(_ts, "language_ts") and callable(getattr(_ts, "language_ts")):
+        if hasattr(_ts, "language_ts") and callable(_ts.language_ts):
             capsule = _ts.language_ts()
-        elif hasattr(_ts, "language_typescript") and callable(getattr(_ts, "language_typescript")):
+        elif hasattr(_ts, "language_typescript") and callable(_ts.language_typescript):
             capsule = _ts.language_typescript()
         else:
             raise ImportError(
@@ -69,28 +69,27 @@ class TypeScriptTreeSitterParser(TreeSitterParser):
     def _is_tsx(self, file_path: Path) -> bool:
         return file_path.suffix.lower() == ".tsx"
 
-    def parse(self, source: bytes, *, is_tsx: bool = False) -> "Tree":
+    def parse(self, source: bytes, *, is_tsx: bool = False) -> Tree:
         import tree_sitter
 
-        lang: "TSLanguage" = self.language
+        lang: TSLanguage = self.language
         parser = tree_sitter.Parser(lang)
         return parser.parse(source)
 
-    def parse_file(self, file_path: Path) -> "Tree":
+    def parse_file(self, file_path: Path) -> Tree:
         content = file_path.read_bytes()
         return self.parse(content, is_tsx=self._is_tsx(file_path))
 
     def extract_imports(
         self,
-        tree: "Tree",
+        tree: Tree,
         file_path: str,
     ) -> list[RawImport]:
         imports: list[RawImport] = []
         source = b""
-        try:
-            source = Path(file_path).read_bytes() if Path(file_path).exists() else b""
-        except OSError:
-            pass
+        if Path(file_path).exists():
+            with contextlib.suppress(OSError):
+                source = Path(file_path).read_bytes()
 
         for node in self._all_nodes_of_type(tree, "import_statement"):
             raw_text = self._node_text(node, source).strip()
@@ -165,10 +164,9 @@ class TypeScriptTreeSitterParser(TreeSitterParser):
         # Handle CommonJS: const x = require('y')
         for node in self._all_nodes_of_type(tree, "variable_declarator"):
             source_bytes = b""
-            try:
-                source_bytes = Path(file_path).read_bytes() if Path(file_path).exists() else b""
-            except OSError:
-                pass
+            if Path(file_path).exists():
+                with contextlib.suppress(OSError):
+                    source_bytes = Path(file_path).read_bytes()
 
             init = self._find_child_by_type(node, "call_expression")
             if init is None:
@@ -206,15 +204,14 @@ class TypeScriptTreeSitterParser(TreeSitterParser):
 
     def extract_symbols(
         self,
-        tree: "Tree",
+        tree: Tree,
         file_path: str,
     ) -> list[RawSymbol]:
         symbols: list[RawSymbol] = []
         source = b""
-        try:
-            source = Path(file_path).read_bytes() if Path(file_path).exists() else b""
-        except OSError:
-            pass
+        if Path(file_path).exists():
+            with contextlib.suppress(OSError):
+                source = Path(file_path).read_bytes()
 
         # Extract interface declarations
         for node in self._all_nodes_of_type(tree, "interface_declaration"):
@@ -360,11 +357,7 @@ class TypeScriptTreeSitterParser(TreeSitterParser):
             line_range = self._node_range(node, source)
             visibility = self._visibility_from_node(self._get_modifiers(node, source))
 
-            # Check for constructor
-            if name == "constructor":
-                sym_type = SymType.CONSTRUCTOR
-            else:
-                sym_type = SymType.METHOD
+            sym_type = SymType.CONSTRUCTOR if name == "constructor" else SymType.METHOD
 
             symbols.append(
                 RawSymbol(
@@ -428,8 +421,8 @@ class TypeScriptScanner(BaseScanner):
     TS_SUFFIXES = _TS_SUFFIXES
 
     def __init__(self) -> None:
-        self._parser: Optional[TypeScriptTreeSitterParser] = None
-        self._resolver: Optional[PathResolver] = None
+        self._parser: TypeScriptTreeSitterParser | None = None
+        self._resolver: PathResolver | None = None
 
     @property
     def parser(self) -> TypeScriptTreeSitterParser:
@@ -458,7 +451,7 @@ class TypeScriptScanner(BaseScanner):
         self,
         file_path: Path,
         project_root: Path,
-        file_index: dict[str, Path] = {},
+        file_index: dict[str, Path] | None = None,
     ) -> ScanResult:
         rel_posix = normalize_path_to_posix(str(file_path), str(project_root))
         suffix = file_path.suffix
@@ -565,7 +558,6 @@ class TypeScriptScanner(BaseScanner):
         Resolve a TypeScript import specifier to a project-relative path,
         or classify as external/stdlib.
         """
-        from deppulse.core.path_resolver import PathResolver
 
         # Check stdlib / external first using PathResolver's helpers
         if self.resolver.is_stdlib(specifier, "typescript"):
@@ -624,7 +616,7 @@ class TypeScriptScanner(BaseScanner):
         raw_text: str,
         source_file: Path,
         project_root: Path,
-        file_index: dict[str, Path] = {},
+        file_index: dict[str, Path] | None = None,
     ) -> ResolvedDependency:
         """Resolve a raw import specifier string to a project path or classify."""
         self.resolver.load_tsconfig(project_root)

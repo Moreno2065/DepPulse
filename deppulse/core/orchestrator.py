@@ -4,10 +4,9 @@ from __future__ import annotations
 
 import fnmatch
 import os
-import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
 
 import networkx as nx
 
@@ -30,7 +29,6 @@ from deppulse.scanners.kotlin_scanner import KotlinScanner
 from deppulse.scanners.python_scanner import PythonScanner
 from deppulse.scanners.typescript_scanner import TypeScriptScanner
 
-
 # ---------------------------------------------------------------------------
 # Supported scanner registry
 # ---------------------------------------------------------------------------
@@ -45,7 +43,7 @@ _SCANNER_REGISTRY: list[BaseScanner] = [
 ]
 
 
-def _get_scanner(path: Path) -> Optional[BaseScanner]:
+def _get_scanner(path: Path) -> BaseScanner | None:
     """Return the first scanner that can handle this file."""
     for scanner in _SCANNER_REGISTRY:
         if scanner.can_scan(path):
@@ -72,12 +70,12 @@ class DependencyOrchestrator:
 
     def __init__(
         self,
-        config: Optional[DepPulseConfig] = None,
+        config: DepPulseConfig | None = None,
         use_cache: bool = True,
     ) -> None:
         self.config = config or DepPulseConfig(project_root=Path.cwd())
         self.use_cache = use_cache
-        self._cache: Optional[ScanCache] = None
+        self._cache: ScanCache | None = None
         self._file_index: dict[str, Path] = {}  # normalized POSIX path -> absolute Path
         self._warnings: list[str] = []
 
@@ -87,8 +85,8 @@ class DependencyOrchestrator:
 
     def scan(
         self,
-        project_root: Optional[Path] = None,
-        files_to_scan: Optional[set[str]] = None,
+        project_root: Path | None = None,
+        files_to_scan: set[str] | None = None,
     ) -> GraphBuildResult:
         """
         Scan the project at `project_root` and build the dependency graph.
@@ -101,7 +99,6 @@ class DependencyOrchestrator:
             If provided, only scan these project-relative POSIX paths.
             Enables true incremental scanning where only changed files are processed.
         """
-        start_time = time.monotonic()
         root = (project_root or self.config.project_root).resolve()
         self.config.project_root = root
 
@@ -123,14 +120,26 @@ class DependencyOrchestrator:
             rel = self._rel_posix(f, root)
             self._file_index[rel] = f
 
-        # Phase 2: scan each file
+        # Phase 2: scan each file (parallel via ThreadPoolExecutor)
         scan_results: list[ScanResult] = []
         errors = 0
-        for f in all_files:
-            result = self._scan_file(f, root)
-            scan_results.append(result)
-            if result.error:
-                errors += 1
+        max_workers = min(32, (os.cpu_count() or 1) + 4)
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_path = {}
+            for f in all_files:
+                future = executor.submit(self._scan_file, f, root)
+                future_to_path[future] = f
+
+            for future in as_completed(future_to_path):
+                f = future_to_path[future]
+                try:
+                    result = future.result()
+                    scan_results.append(result)
+                    if result.error:
+                        errors += 1
+                except Exception as e:
+                    self.warnings.append(f"Scan failed for {f}: {e}")
+                    errors += 1
 
         # Phase 2.5: build UnifiedIR from scan results
         unified_ir: UnifiedIR = build_unified_ir(scan_results, str(root))
@@ -141,8 +150,6 @@ class DependencyOrchestrator:
         # Save cache
         if self._cache is not None:
             self._cache.save()
-
-        elapsed = time.monotonic() - start_time
 
         # Build statistics
         stats = self._compute_stats(graph, scan_results, files_with_cycles)
@@ -211,22 +218,22 @@ class DependencyOrchestrator:
 
     def _is_ignored_dir(self, path: Path) -> bool:
         """Check if path matches any ignore pattern (for full paths, not just names)."""
-        name = path.name
-        for pattern in self.config.ignore_dirs:
-            if fnmatch.fnmatch(name, pattern):
-                return True
-        return False
+        return any(fnmatch.fnmatch(path.name, pattern) for pattern in self.config.ignore_dirs)
 
     def _is_ignored_file(self, name: str) -> bool:
         """Check if filename matches ignore patterns."""
-        for pattern in self.config.ignore_files:
-            if fnmatch.fnmatch(name, pattern):
-                return True
-        return False
+        return any(fnmatch.fnmatch(name, pattern) for pattern in self.config.ignore_files)
 
     # ------------------------------------------------------------------
     # File scanning
     # ------------------------------------------------------------------
+
+    def _scanner_for(self, path: Path) -> BaseScanner | None:
+        """Return a fresh scanner instance that can handle this file."""
+        for scanner in _SCANNER_REGISTRY:
+            if scanner.can_scan(path):
+                return type(scanner)()
+        return None
 
     def _scan_file(self, file_path: Path, project_root: Path) -> ScanResult:
         """Scan a single file, using cache if available and unchanged."""
@@ -240,9 +247,9 @@ class DependencyOrchestrator:
                 return self._result_from_dict(cached, rel_posix, str(file_path))
 
         # Run the scanner
-        scanner = _get_scanner(file_path)
+        scanner = self._scanner_for(file_path)
         if scanner is None:
-            from deppulse.models import ScanResult, Language
+            from deppulse.models import Language, ScanResult
 
             return ScanResult(
                 file_path=rel_posix,
@@ -271,7 +278,7 @@ class DependencyOrchestrator:
         project_root: Path,
     ) -> tuple[nx.DiGraph, int]:
         """Build a networkx.DiGraph from scan results."""
-        G = nx.DiGraph()
+        graph = nx.DiGraph()
 
         # Add all nodes first
         for result in scan_results:
@@ -286,18 +293,18 @@ class DependencyOrchestrator:
                 unresolved_count=len(result.unresolved_dependencies),
                 external_count=len(result.external_dependencies),
             )
-            G.add_node(result.file_path, **vars(node_meta))
+            graph.add_node(result.file_path, **vars(node_meta))
 
         # Add edges
         files_in_cycles: set[str] = set()
         for result in scan_results:
-            if result.file_path not in G:
+            if result.file_path not in graph:
                 continue
 
             for resolved in result.internal_dependencies:
                 if resolved.normalized_path is None:
                     continue
-                if resolved.normalized_path not in G:
+                if resolved.normalized_path not in graph:
                     # Create a ghost node for unresolved-but-known internal deps
                     ghost_meta = NodeMetadata(
                         path=resolved.normalized_path,
@@ -308,7 +315,7 @@ class DependencyOrchestrator:
                         unresolved_count=0,
                         external_count=0,
                     )
-                    G.add_node(resolved.normalized_path, **vars(ghost_meta))
+                    graph.add_node(resolved.normalized_path, **vars(ghost_meta))
 
                 edge_meta = EdgeMetadata(
                     raw_text=resolved.raw.raw_text,
@@ -316,18 +323,18 @@ class DependencyOrchestrator:
                     line_number=resolved.raw.line_number,
                     resolved_by=self._edge_resolved_by(result.absolute_path, resolved.normalized_path),
                 )
-                G.add_edge(
+                graph.add_edge(
                     result.file_path,
                     resolved.normalized_path,
                     **vars(edge_meta),
                 )
 
         # Populate files_in_cycles: find all nodes that participate in any cycle
-        for cycle in nx.simple_cycles(G):
+        for cycle in nx.simple_cycles(graph):
             for node in cycle:
                 files_in_cycles.add(node)
 
-        return G, len(files_in_cycles)
+        return graph, len(files_in_cycles)
 
     # ------------------------------------------------------------------
     # Statistics
@@ -335,7 +342,7 @@ class DependencyOrchestrator:
 
     def _compute_stats(
         self,
-        G: nx.DiGraph,
+        graph: nx.DiGraph,
         scan_results: list[ScanResult],
         files_with_cycles: int,
     ) -> GraphStats:
@@ -363,12 +370,12 @@ class DependencyOrchestrator:
         }
 
         # All edges in the graph represent internal dependencies (from internal_dependencies)
-        internal_edges = G.number_of_edges()
+        internal_edges = graph.number_of_edges()
         external_edges = 0
 
         return GraphStats(
-            total_files=G.number_of_nodes(),
-            total_edges=G.number_of_edges(),
+            total_files=graph.number_of_nodes(),
+            total_edges=graph.number_of_edges(),
             python_files=python_count,
             java_files=java_count,
             kotlin_files=kotlin_count,
@@ -452,7 +459,7 @@ class DependencyOrchestrator:
             Language,
             RawDependency,
             ResolvedDependency,
-            ScanResult as SR,
+            ScanResult,
         )
 
         symbols = [
@@ -498,7 +505,7 @@ class DependencyOrchestrator:
             for d in data.get("dynamic_imports", [])
         ]
 
-        return SR(
+        return ScanResult(
             file_path=file_path,
             absolute_path=absolute_path,
             language=Language(data.get("language", "unknown")),

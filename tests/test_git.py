@@ -1,10 +1,8 @@
 """Tests for the git module."""
 
-import tempfile
 import subprocess
+import tempfile
 from pathlib import Path
-
-import pytest
 
 from deppulse.git import (
     get_changed_files,

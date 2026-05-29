@@ -4,11 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
-
+from typing import Any
 
 CacheData = dict[str, Any]
 
@@ -38,7 +36,7 @@ class ScanCache:
     _dirty: bool = field(default=False, init=False)
 
     @classmethod
-    def load(cls, cache_dir: Path) -> "ScanCache":
+    def load(cls, cache_dir: Path) -> ScanCache:
         """Load an existing cache, or return an empty cache if none exists."""
         cache_file = cache_dir / "cache.json"
         instance = cls(cache_file=cache_file)
@@ -99,7 +97,7 @@ class ScanCache:
         self,
         rel_path: str,
         abs_path: Path,
-    ) -> Optional[dict[str, Any]]:
+    ) -> dict[str, Any] | None:
         """
         Return a cached scan result if the file has not changed.
 

@@ -1,10 +1,9 @@
 """User profile submodule."""
 
-from typing import Optional
 
 
 class Profile:
-    def __init__(self, username: str, bio: Optional[str] = None):
+    def __init__(self, username: str, bio: str | None = None):
         self.username = username
         self.bio = bio or ""
 

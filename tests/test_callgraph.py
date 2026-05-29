@@ -1,28 +1,20 @@
 """Tests for the symbol-level call graph builder."""
 
-from datetime import datetime
-from pathlib import Path
 
-import pytest
 
 from deppulse.core.callgraph import (
     CallGraphBuilder,
     _build_symbol_index,
-    _escape_mermaid,
     _escape_dot,
+    _escape_mermaid,
+    callgraph_to_dot,
     callgraph_to_json,
     callgraph_to_mermaid,
-    callgraph_to_dot,
 )
 from deppulse.models import (
     ExtractedSymbol,
-    GraphBuildResult,
-    GraphStats,
     Language,
     ScanResult,
-    Symbol,
-    SymbolCall,
-    SymbolType,
 )
 
 

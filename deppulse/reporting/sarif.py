@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
 
 from deppulse import __version__
 from deppulse.models import (
@@ -19,8 +18,8 @@ from deppulse.models import (
 def graph_to_sarif(
     result: GraphBuildResult,
     *,
-    project_root: Optional[str] = None,
-    cycle_report: Optional[CycleReport] = None,
+    project_root: str | None = None,
+    cycle_report: CycleReport | None = None,
     tool_name: str = "DepPulse",
     tool_version: str = __version__,
 ) -> dict:

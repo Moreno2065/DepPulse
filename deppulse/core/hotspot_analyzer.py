@@ -16,8 +16,6 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Optional
-
 
 # ---------------------------------------------------------------------------
 # Types
@@ -84,7 +82,7 @@ class HotspotAnalyzer:
     def __init__(
         self,
         project_root: Path,
-        cache_path: Optional[Path] = None,
+        cache_path: Path | None = None,
         days: int = 90,
     ) -> None:
         self.project_root = project_root.resolve()
@@ -159,8 +157,6 @@ class HotspotAnalyzer:
 
     def _compute_hotspots(self) -> HotspotReport:
         """Compute hotspot metrics from git history."""
-        cutoff = datetime.now() - timedelta(days=self.days)
-
         # Parse git log for per-file commit history
         log_output = self._run_git_log(self.days)
         file_commits: dict[str, list[tuple[str, str, str]]] = defaultdict(list)  # path → [(commit_hash, author_email, message)]
@@ -217,7 +213,7 @@ class HotspotAnalyzer:
         # Determine known hotspot files (bug fix rate > project avg * 2)
         all_bug_fixes = 0
         all_commits = 0
-        for path, commits in file_commits.items():
+        for commits in file_commits.values():
             all_commits += len(commits)
             all_bug_fixes += sum(1 for _, _, msg in commits if self._looks_like_bug_fix(msg))
 
@@ -241,14 +237,6 @@ class HotspotAnalyzer:
                 is_hotspot=bug_fix_rate > project_avg_bug_fix_rate * 2,
             )
             file_data[path] = hotspot
-
-        # Build co-change matrix from recent commits
-        co_change_matrix: dict[str, set[str]] = defaultdict(set)
-        for path, commits in file_commits.items():
-            # For each commit, note co-changes
-            commit_file_map: dict[str, set[str]] = defaultdict(set)
-            # Re-parse to group files by commit
-            pass
 
         # Rebuild co-change matrix properly
         co_change_matrix = self._build_co_change_matrix(file_commits)
@@ -276,7 +264,7 @@ class HotspotAnalyzer:
             file_data=file_data,
             project_avg_bug_fix_rate=project_avg_bug_fix_rate,
             project_avg_churn=project_avg_commits,
-            co_change_matrix={k: v for k, v in co_change_matrix.items()},
+            co_change_matrix=dict(co_change_matrix.items()),
             git_ref=ref,
         )
 
@@ -298,7 +286,7 @@ class HotspotAnalyzer:
 
         # Build co-change matrix
         co_change: dict[str, set[str]] = defaultdict(set)
-        for commit_hash, files in commit_to_files.items():
+        for files in commit_to_files.values():
             files_list = sorted(files)
             # Only consider commits with 2-20 files (filter out mass reformatting)
             if 2 <= len(files_list) <= 20:
@@ -331,21 +319,16 @@ class HotspotAnalyzer:
             r"revert", r"\bundo\b",
         ]
 
-        for pattern in bug_keywords:
-            if re.search(pattern, msg_lower):
-                return True
+        if any(re.search(pattern, msg_lower) for pattern in bug_keywords):
+            return True
 
-        for pattern in fix_patterns:
-            if re.search(pattern, msg_lower):
-                return True
-
-        return False
+        return any(re.search(pattern, msg_lower) for pattern in fix_patterns)
 
     # ------------------------------------------------------------------------
     # Cache management
     # ------------------------------------------------------------------------
 
-    def _load_cache(self) -> Optional[HotspotReport]:
+    def _load_cache(self) -> HotspotReport | None:
         """Load hotspot report from cache file."""
         if not self.cache_path.exists():
             return None

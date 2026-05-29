@@ -6,7 +6,6 @@ import ast
 import os
 import sys
 from pathlib import Path
-from typing import Optional
 
 from deppulse.core.path_resolver import PathResolver
 from deppulse.models import (
@@ -20,7 +19,6 @@ from deppulse.models import (
 )
 from deppulse.scanners.base import BaseScanner
 
-
 # Standard library modules that are unlikely to be project files.
 _STDLIB_MODULES: frozenset[str] = frozenset(sys.stdlib_module_names)
 
@@ -32,7 +30,7 @@ class PySymbolVisitor(ast.NodeVisitor):
         self.module_name = module_name
         self.symbols: list[ExtractedSymbol] = []
 
-    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+    def visit_functiondef(self, node: ast.FunctionDef) -> None:
         fully_qualified = f"function:{node.name}"
         self.symbols.append(
             ExtractedSymbol(
@@ -42,9 +40,9 @@ class PySymbolVisitor(ast.NodeVisitor):
             )
         )
 
-    visit_AsyncFunctionDef = visit_FunctionDef  # type: ignore[assignment]
+    visit_asyncfunctiondef = visit_functiondef  # type: ignore[assignment]
 
-    def visit_ClassDef(self, node: ast.ClassDef) -> None:
+    def visit_classdef(self, node: ast.ClassDef) -> None:
         class_name = f"class:{node.name}"
         self.symbols.append(
             ExtractedSymbol(
@@ -54,16 +52,7 @@ class PySymbolVisitor(ast.NodeVisitor):
             )
         )
         for item in node.body:
-            if isinstance(item, ast.FunctionDef):
-                method_qualified = f"method:{node.name}.{item.name}"
-                self.symbols.append(
-                    ExtractedSymbol(
-                        symbol_type="method",
-                        name=item.name,
-                        fully_qualified=method_qualified,
-                    )
-                )
-            elif hasattr(ast, "AsyncFunctionDef") and isinstance(item, ast.AsyncFunctionDef):
+            if isinstance(item, ast.FunctionDef) or hasattr(ast, "AsyncFunctionDef") and isinstance(item, ast.AsyncFunctionDef):
                 method_qualified = f"method:{node.name}.{item.name}"
                 self.symbols.append(
                     ExtractedSymbol(
@@ -97,8 +86,8 @@ class PythonScanner(BaseScanner):
 
     def __init__(
         self,
-        project_root: Optional[Path] = None,
-        file_index: Optional[dict[str, Path]] = None,
+        project_root: Path | None = None,
+        file_index: dict[str, Path] | None = None,
     ) -> None:
         """
         Initialize the Python scanner with an optional resolver.
@@ -115,7 +104,7 @@ class PythonScanner(BaseScanner):
     # -- Redesign properties --
 
     @property
-    def parser(self) -> "PythonScanner":
+    def parser(self) -> PythonScanner:
         """
         Return the parser for this scanner.
 
@@ -164,7 +153,7 @@ class PythonScanner(BaseScanner):
         self,
         file_path: Path,
         project_root: Path,
-        file_index: dict[str, Path] = {},
+        file_index: dict[str, Path] | None = None,
     ) -> ScanResult:
         from deppulse.models import normalize_path_to_posix
 
@@ -248,7 +237,7 @@ class PyImportVisitor(ast.NodeVisitor):
         self,
         source_file: Path,
         project_root: Path,
-        file_index: Optional[dict[str, Path]],
+        file_index: dict[str, Path] | None,
         rel_posix: str,
     ) -> None:
         self.source_file = source_file
@@ -263,7 +252,7 @@ class PyImportVisitor(ast.NodeVisitor):
     # Import node visitors
     # ------------------------------------------------------------------
 
-    def visit_Import(self, node: ast.Import) -> None:
+    def visit_import(self, node: ast.Import) -> None:
         for alias_node in node.names:
             raw_text = f"import {alias_node.name}" + (
                 f" as {alias_node.asname}" if alias_node.asname else ""
@@ -271,7 +260,7 @@ class PyImportVisitor(ast.NodeVisitor):
             self._record_import(raw_text, alias_node.name, node.lineno or 0, level=0)
         self.generic_visit(node)
 
-    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:
+    def visit_importfrom(self, node: ast.ImportFrom) -> None:
         module_name = node.module or ""
         level = node.level  # 0 = absolute, 1 = single dot, 2 = double dot, etc.
 
@@ -288,17 +277,15 @@ class PyImportVisitor(ast.NodeVisitor):
             self._record_import(raw_text, module_name, node.lineno or 0, level=0)
         self.generic_visit(node)
 
-    def visit_Call(self, node: ast.Call) -> None:
+    def visit_call(self, node: ast.Call) -> None:
         """Detect dynamic imports via __import__() and importlib.import_module()."""
         func = node.func
-        import_type: Optional[str] = None
+        import_type: str | None = None
 
         if isinstance(func, ast.Name) and func.id == "__import__":
             import_type = "__import__"
-        elif isinstance(func, ast.Attribute):
-            if isinstance(func.value, ast.Name) and func.value.id == "importlib":
-                if func.attr == "import_module":
-                    import_type = "importlib.import_module"
+        elif isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name) and func.value.id == "importlib" and func.attr == "import_module":
+            import_type = "importlib.import_module"
 
         if import_type is not None:
             line_no = node.lineno or 0
@@ -358,7 +345,6 @@ class PyImportVisitor(ast.NodeVisitor):
 
     def _resolve_module(self, module_name: str) -> ResolvedDependency:
         """Resolve an absolute module name to a project file or classify as external."""
-        from deppulse.models import normalize_path_to_posix
 
         if module_name in _STDLIB_MODULES:
             raw_dep = self.raw_deps[-1] if self.raw_deps else RawDependency(
@@ -424,10 +410,7 @@ class PyImportVisitor(ast.NodeVisitor):
         for _ in range(level - 1):
             current = current.parent
 
-        if module_name:
-            parts = module_name.split(".")
-        else:
-            parts = []
+        parts = module_name.split(".") if module_name else []
 
         # Determine the candidate package/module path
         candidate_rel: Path = current

@@ -1,6 +1,5 @@
 """Math utilities - Python wrapper around C functions."""
 
-import ctypes
 
 
 def add(a: int, b: int) -> int:

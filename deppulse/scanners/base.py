@@ -2,7 +2,7 @@
 
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from deppulse.models import ResolvedDependency, ScanResult
@@ -35,7 +35,7 @@ class BaseScanner(ABC):
         self,
         file_path: Path,
         project_root: Path,
-        file_index: dict[str, Path] = {},
+        file_index: dict[str, Path] | None = None,
     ) -> "ScanResult":
         """
         Scan a single file and return a structured ScanResult.
@@ -63,7 +63,7 @@ class BaseScanner(ABC):
         raw_text: str,
         source_file: Path,
         project_root: Path,
-        file_index: dict[str, Path] = {},
+        file_index: dict[str, Path] | None = None,
     ) -> "ResolvedDependency":
         """
         Resolve a raw dependency text to a project-relative path or classify

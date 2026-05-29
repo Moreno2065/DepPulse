@@ -1,17 +1,15 @@
 """Tests for the Python source code scanner."""
 
 import ast
-import os
+import contextlib
 import shutil
-import sys
 import tempfile
 from pathlib import Path
 
 import pytest
 
-from deppulse.models import DependencyKind, Language
-from deppulse.scanners.python_scanner import PythonScanner, PySymbolVisitor, _STDLIB_MODULES
-
+from deppulse.models import Language
+from deppulse.scanners.python_scanner import PySymbolVisitor, PythonScanner
 
 FIXTURE_ROOT = Path(__file__).parent / "fixtures" / "python_project"
 
@@ -86,10 +84,8 @@ def _tmp_file(code: str, suffix: str = ".py") -> tuple[Path, Path]:
 
 
 def _cleanup_tmpdir(tmpdir: Path) -> None:
-    try:
+    with contextlib.suppress(OSError):
         shutil.rmtree(tmpdir)
-    except OSError:
-        pass
 
 
 class TestPythonScanner:
