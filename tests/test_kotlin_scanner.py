@@ -151,8 +151,8 @@ class TestExtractSymbolsTreeSitter:
         symbols = _extract_symbols(code)
         names = {s.fqn for s in symbols}
         assert "class:Outer" in names
-        assert "class:Inner" in names
-        assert "method:Inner.innerMethod" in names
+        assert "class:Outer.Inner" in names
+        assert "method:Outer.Inner.innerMethod" in names
 
     def test_comments_ignored(self):
         code = "// fun commentedOut() {}\nfun actual() {}"

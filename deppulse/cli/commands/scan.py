@@ -6,10 +6,8 @@ import argparse
 from pathlib import Path
 
 from deppulse.config import DepPulseConfig
-from deppulse.core.orchestrator import DependencyOrchestrator
 from deppulse.git import is_git_repo
 from deppulse.ui import render as ui
-
 
 COMMAND_NAME = "scan"
 
@@ -76,7 +74,7 @@ def handle(args: argparse.Namespace) -> int:
         else:
             ui.console.print("[dim]No changed files found.[/dim]")
 
-    result, graph, elapsed = run_scan(args.path, config, use_cache=True, files_to_scan=files_to_scan)
+    result, graph, elapsed = run_scan(args.path, config, use_cache=args.use_cache, files_to_scan=files_to_scan)
 
     if args.sarif_output:
         sarif_dict = graph_to_sarif(result)

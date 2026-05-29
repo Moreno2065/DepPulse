@@ -26,7 +26,7 @@ class TestIncrementalScan:
         # Pass explicit config so cache_dir points to tmp_path/.deppulse
         config = DepPulseConfig(project_root=tmp_path)
         orchestrator = DependencyOrchestrator(config=config, use_cache=True)
-        result = orchestrator.scan(tmp_path)
+        orchestrator.scan(tmp_path)
 
         cache_file = tmp_path / ".deppulse" / "cache.json"
         assert cache_file.exists(), f"Cache file should be created at {cache_file}"

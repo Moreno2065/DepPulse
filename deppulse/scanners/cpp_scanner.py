@@ -6,6 +6,7 @@ for accurate, syntax-aware extraction of includes, declarations, and symbols.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -37,6 +38,20 @@ if TYPE_CHECKING:
 
 # Supported C/C++ file extensions.
 CPP_EXTENSIONS = frozenset({".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx"})
+
+# ---------------------------------------------------------------------------
+# Comment stripping utility (used by tests)
+# ---------------------------------------------------------------------------
+
+_RE_SINGLELINE_COMMENT = re.compile(r"//.*$", re.MULTILINE)
+_RE_BLOCK_COMMENT = re.compile(r"/\*.*?\*/", re.DOTALL)
+
+
+def _strip_comments(code: str) -> str:
+    """Remove // and /* */ comments from C++ source code."""
+    code = _RE_SINGLELINE_COMMENT.sub("", code)
+    code = _RE_BLOCK_COMMENT.sub("", code)
+    return code
 
 # ---------------------------------------------------------------------------
 # CppTreeSitterParser

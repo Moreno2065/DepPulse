@@ -12,7 +12,6 @@ from deppulse.core.risk import compute_risk_score
 from deppulse.models import normalize_path_to_posix
 from deppulse.ui import render as ui
 
-
 COMMAND_NAME = "trace"
 
 
@@ -41,7 +40,7 @@ def handle(args: argparse.Namespace) -> int:
     if args.ci:
         ui.set_ci_mode(True)
 
-    result, graph, _elapsed = run_scan(args.path, config, use_cache=True)
+    result, graph, _elapsed = run_scan(args.path, config, use_cache=args.use_cache)
 
     mutated_files = args.mutated_file
     project_path_str = str(args.path.resolve())

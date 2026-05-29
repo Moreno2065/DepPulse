@@ -30,7 +30,8 @@ class PySymbolVisitor(ast.NodeVisitor):
         self.module_name = module_name
         self.symbols: list[ExtractedSymbol] = []
 
-    def visit_functiondef(self, node: ast.FunctionDef) -> None:
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:  # noqa: N802
+        """AST visitor: FunctionDef nodes are PascalCase in Python 3.13."""
         fully_qualified = f"function:{node.name}"
         self.symbols.append(
             ExtractedSymbol(
@@ -40,9 +41,10 @@ class PySymbolVisitor(ast.NodeVisitor):
             )
         )
 
-    visit_asyncfunctiondef = visit_functiondef  # type: ignore[assignment]
+    visit_AsyncFunctionDef = visit_FunctionDef  # type: ignore[assignment, misc]  # noqa: N815
 
-    def visit_classdef(self, node: ast.ClassDef) -> None:
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:  # noqa: N802
+        """AST visitor: ClassDef nodes are PascalCase in Python 3.13."""
         class_name = f"class:{node.name}"
         self.symbols.append(
             ExtractedSymbol(
@@ -52,7 +54,7 @@ class PySymbolVisitor(ast.NodeVisitor):
             )
         )
         for item in node.body:
-            if isinstance(item, ast.FunctionDef) or hasattr(ast, "AsyncFunctionDef") and isinstance(item, ast.AsyncFunctionDef):
+            if isinstance(item, ast.FunctionDef | ast.AsyncFunctionDef):
                 method_qualified = f"method:{node.name}.{item.name}"
                 self.symbols.append(
                     ExtractedSymbol(
@@ -252,7 +254,8 @@ class PyImportVisitor(ast.NodeVisitor):
     # Import node visitors
     # ------------------------------------------------------------------
 
-    def visit_import(self, node: ast.Import) -> None:
+    def visit_Import(self, node: ast.Import) -> None:  # noqa: N802
+        """AST visitor: Import nodes are PascalCase in Python 3.13."""
         for alias_node in node.names:
             raw_text = f"import {alias_node.name}" + (
                 f" as {alias_node.asname}" if alias_node.asname else ""
@@ -260,7 +263,8 @@ class PyImportVisitor(ast.NodeVisitor):
             self._record_import(raw_text, alias_node.name, node.lineno or 0, level=0)
         self.generic_visit(node)
 
-    def visit_importfrom(self, node: ast.ImportFrom) -> None:
+    def visit_ImportFrom(self, node: ast.ImportFrom) -> None:  # noqa: N802
+        """AST visitor: ImportFrom nodes are PascalCase in Python 3.13."""
         module_name = node.module or ""
         level = node.level  # 0 = absolute, 1 = single dot, 2 = double dot, etc.
 
@@ -277,7 +281,7 @@ class PyImportVisitor(ast.NodeVisitor):
             self._record_import(raw_text, module_name, node.lineno or 0, level=0)
         self.generic_visit(node)
 
-    def visit_call(self, node: ast.Call) -> None:
+    def visit_Call(self, node: ast.Call) -> None:  # noqa: N802
         """Detect dynamic imports via __import__() and importlib.import_module()."""
         func = node.func
         import_type: str | None = None
@@ -415,12 +419,17 @@ class PyImportVisitor(ast.NodeVisitor):
         # Determine the candidate package/module path
         candidate_rel: Path = current
         if parts:
-            candidate_rel = current / "/".join(parts)
+            candidate_rel = current.joinpath(*parts)
 
         if self.file_index:
             # Try exact path in file_index first
-            parts_posix = candidate_rel.relative_to(self.project_root)
-            candidate_posix = "/".join(parts_posix.parts)
+            try:
+                parts_posix = "/".join(candidate_rel.relative_to(self.project_root).parts)
+            except ValueError:
+                parts_posix = ""
+
+            # candidate_posix is simply parts_posix (candidate_rel already includes module name)
+            candidate_posix = parts_posix
 
             candidates = [
                 candidate_posix + "/__init__.py",

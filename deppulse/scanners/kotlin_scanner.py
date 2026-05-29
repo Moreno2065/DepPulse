@@ -243,7 +243,9 @@ class KotlinTreeSitterParser(TreeSitterParser):
         - Companion object members (nested)
         """
         symbols: list[RawSymbol] = []
-        source = tree.root_node.text
+        # Always use the stored source from parse(), NOT root_node.text
+        # (root_node.text may not include leading whitespace/newlines)
+        source = self._current_source
         self._collect_symbols(tree.root_node, source, file_path, symbols, parent_fqn=None)
         return symbols
 
@@ -447,29 +449,38 @@ class KotlinTreeSitterParser(TreeSitterParser):
         """Extract a property (val/var) declaration."""
         visibility = self._visibility_from_modifiers(node, source)
 
-        # Get the property name(s) — first identifier after val/var
+        # Get the property name — first identifier found (may be nested in variable_declaration)
+        prop_name: str | None = None
         for child in node.children:
             if child.type == "identifier":
                 prop_name = self._node_text(child, source)
-                if parent_fqn:
-                    # Strip any existing type prefix from parent_fqn
-                    import re
-                    clean_parent = re.sub(r"^(function|class|method|property|constructor|interface|enum|annotation|type_alias):", "", parent_fqn)
-                    fqn = f"property:{clean_parent}.{prop_name}"
-                else:
-                    fqn = f"property:{prop_name}"
-                sym_type = SymType.PROPERTY
-                symbols.append(
-                    RawSymbol(
-                        name=prop_name,
-                        fqn=fqn,
-                        sym_type=sym_type,
-                        file_path=file_path,
-                        line_range=self._node_range(node, source),
-                        visibility=visibility,
-                    )
-                )
                 break
+            if child.type == "variable_declaration":
+                for grandchild in child.children:
+                    if grandchild.type == "identifier":
+                        prop_name = self._node_text(grandchild, source)
+                        break
+                if prop_name:
+                    break
+
+        if prop_name:
+            if parent_fqn:
+                import re
+                clean_parent = re.sub(r"^(function|class|method|property|constructor|interface|enum|annotation|type_alias):", "", parent_fqn)
+                fqn = f"property:{clean_parent}.{prop_name}"
+            else:
+                fqn = f"property:{prop_name}"
+            sym_type = SymType.PROPERTY
+            symbols.append(
+                RawSymbol(
+                    name=prop_name,
+                    fqn=fqn,
+                    sym_type=sym_type,
+                    file_path=file_path,
+                    line_range=self._node_range(node, source),
+                    visibility=visibility,
+                )
+            )
 
     def _visibility_from_modifiers(self, node, source: bytes) -> Visibility:
         """Determine visibility from modifiers on a declaration node."""
