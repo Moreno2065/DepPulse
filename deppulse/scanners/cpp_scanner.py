@@ -22,6 +22,8 @@ from deppulse.core.ir import (
 from deppulse.core.path_resolver import PathResolver
 from deppulse.core.tree_sitter_parser import TreeSitterParser
 from deppulse.models import (
+    ConfidenceLevel,
+    ConfidenceSource,
     DependencyKind,
     ExtractedSymbol,
     Language,
@@ -535,6 +537,8 @@ class CppScanner(BaseScanner):
                     is_external=True,
                     is_stdlib=True,
                     is_unresolved=False,
+                    confidence=ConfidenceLevel.AST,
+                    confidence_source=ConfidenceSource.STATIC_AST,
                 )
             return ResolvedDependency(
                 raw=raw_dep,
@@ -542,6 +546,8 @@ class CppScanner(BaseScanner):
                 is_external=True,
                 is_stdlib=False,
                 is_unresolved=False,
+                confidence=ConfidenceLevel.AST,
+                confidence_source=ConfidenceSource.STATIC_AST,
             )
 
         # Local include: try to resolve
@@ -584,6 +590,8 @@ class CppScanner(BaseScanner):
                     is_external=False,
                     is_stdlib=False,
                     is_unresolved=False,
+                    confidence=ConfidenceLevel.AST,
+                    confidence_source=ConfidenceSource.STATIC_AST,
                 )
 
         # Strategy 2: relative to project root
@@ -596,6 +604,8 @@ class CppScanner(BaseScanner):
                 is_external=False,
                 is_stdlib=False,
                 is_unresolved=False,
+                confidence=ConfidenceLevel.AST,
+                confidence_source=ConfidenceSource.STATIC_AST,
             )
 
         # Strategy 3: basename search in file index
@@ -619,6 +629,8 @@ class CppScanner(BaseScanner):
                 is_stdlib=False,
                 is_unresolved=True,
                 resolution_note=f"header '{include_text}' not found in project",
+                confidence=ConfidenceLevel.UNKNOWN,
+                confidence_source=ConfidenceSource.UNRESOLVED,
             )
 
         if len(matches) == 1:
@@ -628,6 +640,8 @@ class CppScanner(BaseScanner):
                 is_external=False,
                 is_stdlib=False,
                 is_unresolved=False,
+                confidence=ConfidenceLevel.AST,
+                confidence_source=ConfidenceSource.STATIC_AST,
             )
 
         # Multiple matches: ambiguous
@@ -638,6 +652,8 @@ class CppScanner(BaseScanner):
             is_stdlib=False,
             is_unresolved=True,
             resolution_note=f"multiple matches: {', '.join(matches)}",
+            confidence=ConfidenceLevel.HEURISTIC,
+            confidence_source=ConfidenceSource.NAME_MATCH,
         )
 
     # -- Conversion helpers -------------------------------------------------

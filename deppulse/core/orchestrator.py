@@ -322,6 +322,8 @@ class DependencyOrchestrator:
                     kind=resolved.raw.kind,
                     line_number=resolved.raw.line_number,
                     resolved_by=self._edge_resolved_by(result.absolute_path, resolved.normalized_path),
+                    confidence=resolved.confidence,
+                    confidence_source=resolved.confidence_source,
                 )
                 graph.add_edge(
                     result.file_path,
@@ -440,6 +442,8 @@ class DependencyOrchestrator:
                     "is_stdlib": d.is_stdlib,
                     "is_unresolved": d.is_unresolved,
                     "resolution_note": d.resolution_note,
+                    "confidence": d.confidence.value if d.confidence else None,
+                    "confidence_source": d.confidence_source.value if d.confidence_source else None,
                 }
                 for d in result.resolved_dependencies
             ],
@@ -453,6 +457,8 @@ class DependencyOrchestrator:
     def _result_from_dict(data: dict, file_path: str, absolute_path: str) -> ScanResult:
         """Reconstruct ScanResult from cached dict."""
         from deppulse.models import (
+            ConfidenceLevel,
+            ConfidenceSource,
             DependencyKind,
             DynamicImport,
             ExtractedSymbol,
@@ -492,6 +498,8 @@ class DependencyOrchestrator:
                 is_stdlib=d["is_stdlib"],
                 is_unresolved=d["is_unresolved"],
                 resolution_note=d.get("resolution_note", ""),
+                confidence=ConfidenceLevel(d["confidence"]) if d.get("confidence") and d["confidence"] != "none" else None,
+                confidence_source=ConfidenceSource(d["confidence_source"]) if d.get("confidence_source") and d["confidence_source"] != "none" else None,
             )
             for d in data.get("resolved_deps", [])
         ]

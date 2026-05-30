@@ -45,6 +45,58 @@ class RiskLevel(str, Enum):
     HIGH = "HIGH"
 
 
+class ConfidenceLevel(str, Enum):
+    """
+    Confidence level for a dependency edge or call edge.
+
+    Each edge in the dependency graph and call graph carries a confidence
+    annotation. This tells users how much to trust that edge — not all
+    edges are equally reliable.
+
+    Levels are ordered from most to least reliable.
+    """
+
+    # LSP-verified: returned by a Language Server Protocol tool
+    # (e.g. textDocument/references, callHierarchy/incomingCalls).
+    # This is the gold standard — the language's own type system confirmed it.
+    LSP = "lsp"
+
+    # AST/CST-verified: extracted by a real parser (ast module, tree-sitter,
+    # javalang). The edge exists in the concrete syntax tree, which means
+    # the dependency is syntactically present in the source.
+    AST = "ast"
+
+    # Heuristic: inferred by name matching, pattern analysis, or structural
+    # rules. For example, a Java method call matched by name across the index.
+    # Useful but noisy — can produce false positives.
+    HEURISTIC = "heuristic"
+
+    # Dynamic/runtime: detected at runtime via tracing, profiling, or
+    # test coverage data. Confirmed to actually happen, but limited to
+    # what the test suite/execution path covered.
+    DYNAMIC = "dynamic"
+
+    # Unknown: statically unresolvable. Could not determine the target.
+    # This is honest — better than silently dropping it or claiming false certainty.
+    UNKNOWN = "unknown"
+
+
+class ConfidenceSource(str, Enum):
+    """
+    How the confidence level was determined.
+    """
+
+    # The source that produced the edge
+    STATIC_AST = "static_ast"          # ast.parse, javalang, tree-sitter
+    LSP_REFERENCES = "lsp_references"  # textDocument/references
+    LSP_CALL_HIERARCHY = "lsp_call_hierarchy"  # callHierarchy/incomingCalls
+    REGEX_PATTERN = "regex_pattern"      # string matching on source text
+    NAME_MATCH = "name_match"          # symbol name lookup in index
+    DYNAMIC_TRACE = "dynamic_trace"     # runtime call tracing
+    RUNTIME_HOOK = "runtime_hook"       # import hook / monkey-patch
+    UNRESOLVED = "unresolved"           # target could not be determined
+
+
 class CycleSeverity(str, Enum):
     """Severity of dependency cycles in a project."""
 
@@ -90,6 +142,9 @@ class ResolvedDependency:
     is_stdlib: bool                 # True if Python stdlib
     is_unresolved: bool            # True if we could not resolve it
     resolution_note: str = ""       # e.g. "ambiguous: found 2 matches"
+    # Confidence annotation (added in v1.0)
+    confidence: ConfidenceLevel | None = None
+    confidence_source: ConfidenceSource | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -179,6 +234,8 @@ class EdgeMetadata:
     kind: DependencyKind
     line_number: int
     resolved_by: str
+    confidence: ConfidenceLevel | None = None
+    confidence_source: ConfidenceSource | None = None
 
 
 @dataclass
@@ -375,6 +432,8 @@ class SymbolCall:
     call_site: tuple[str, int]  # (file_path, line_number)
     is_polymorphic: bool = False  # virtual dispatch (Java/C++ override)
     is_external: bool = False     # cross-module / external library call
+    confidence: ConfidenceLevel | None = None
+    confidence_source: ConfidenceSource | None = None
 
 
 @dataclass
@@ -602,3 +661,103 @@ class PRReportResult:
     suggested_tests: list[str]
     top_affected: list[FileRiskEntry]
     markdown_body: str
+
+
+# ---------------------------------------------------------------------------
+# Confidence utilities
+# ---------------------------------------------------------------------------
+
+
+def infer_confidence_from_resolution(
+    is_unresolved: bool,
+    is_external: bool,
+    is_stdlib: bool,
+    resolved_by: str,
+) -> tuple[ConfidenceLevel, ConfidenceSource]:
+    """
+    Infer a confidence level from the resolution result of a dependency edge.
+
+    This is the default confidence attribution applied when no explicit
+    LSP or dynamic analysis has been performed. It is conservative and
+    honest about its own limitations.
+
+    Parameters
+    ----------
+    is_unresolved : bool
+        Whether the dependency could not be resolved to a project file.
+    is_external : bool
+        Whether the dependency points outside the project.
+    is_stdlib : bool
+        Whether the dependency is a known standard library.
+    resolved_by : str
+        The scanner name that produced this edge.
+
+    Returns
+    -------
+    tuple[ConfidenceLevel, ConfidenceSource]
+        The inferred confidence level and source.
+    """
+    if is_unresolved:
+        return (ConfidenceLevel.UNKNOWN, ConfidenceSource.UNRESOLVED)
+
+    # External dependencies (third-party packages) are confirmed by the scanner's
+    # external detection logic — not just string matching.
+    if is_external:
+        return (ConfidenceLevel.AST, ConfidenceSource.STATIC_AST)
+
+    # A resolved internal dependency — comes from the AST/CST, so AST-level confidence.
+    # The scanner walked the parse tree and matched the result to a project file.
+    return (ConfidenceLevel.AST, ConfidenceSource.STATIC_AST)
+
+
+def confidence_to_score(level: ConfidenceLevel | None) -> float:
+    """
+    Convert a confidence level to a numeric score (0.0–1.0).
+
+    Used for sorting, filtering, and reporting.
+    """
+    if level is None:
+        return 0.5
+    score_map = {
+        ConfidenceLevel.LSP: 1.0,
+        ConfidenceLevel.AST: 0.85,
+        ConfidenceLevel.HEURISTIC: 0.5,
+        ConfidenceLevel.DYNAMIC: 0.95,
+        ConfidenceLevel.UNKNOWN: 0.0,
+    }
+    return score_map.get(level, 0.5)
+
+
+def confidence_emoji(level: ConfidenceLevel | None) -> str:
+    """Return a brief visual label for a confidence level."""
+    if level is None:
+        return "[?]"
+    labels = {
+        ConfidenceLevel.LSP: "[LSP]",
+        ConfidenceLevel.AST: "[AST]",
+        ConfidenceLevel.HEURISTIC: "[HRS]",
+        ConfidenceLevel.DYNAMIC: "[DYN]",
+        ConfidenceLevel.UNKNOWN: "[UNK]",
+    }
+    return labels.get(level, "[?]")
+
+
+def describe_confidence(level: ConfidenceLevel | None, source: ConfidenceSource | None) -> str:
+    """
+    Return a human-readable description of the confidence annotation.
+    """
+    if level is None or source is None:
+        return "Confidence not assessed"
+
+    source_desc = {
+        ConfidenceSource.STATIC_AST: "verified by AST/CST parser",
+        ConfidenceSource.LSP_REFERENCES: "confirmed by LSP textDocument/references",
+        ConfidenceSource.LSP_CALL_HIERARCHY: "confirmed by LSP callHierarchy",
+        ConfidenceSource.REGEX_PATTERN: "matched by regex pattern",
+        ConfidenceSource.NAME_MATCH: "resolved by symbol name matching",
+        ConfidenceSource.DYNAMIC_TRACE: "observed at runtime via tracing",
+        ConfidenceSource.RUNTIME_HOOK: "observed at runtime via import hook",
+        ConfidenceSource.UNRESOLVED: "target could not be statically determined",
+    }.get(source, str(source.value))
+
+    return f"{level.value.upper()} confidence — {source_desc}"

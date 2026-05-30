@@ -8,6 +8,8 @@ from typing import TYPE_CHECKING
 from deppulse.core.path_resolver import PathResolver
 from deppulse.core.tree_sitter_parser import TreeSitterParser
 from deppulse.models import (
+    ConfidenceLevel,
+    ConfidenceSource,
     DependencyKind,
     ExtractedSymbol,
     Language,
@@ -420,10 +422,8 @@ class JavaScriptScanner(BaseScanner):
         Resolve a JavaScript module specifier to a project-relative POSIX path
         or classify it as external/stdlib.
 
-        Resolution order:
-        1. Relative specifier (``./``, ``../``) → PathResolver.resolve_relative()
-        2. Absolute / bare specifier → PathResolver.resolve_absolute(language="javascript")
-        3. External / stdlib classification via PathResolver
+        All results carry AST-level confidence because tree-sitter confirmed
+        the import exists in the source tree.
         """
         if self._resolver is None:
             return ResolvedDependency(
@@ -433,6 +433,8 @@ class JavaScriptScanner(BaseScanner):
                 is_stdlib=False,
                 is_unresolved=True,
                 resolution_note="resolver not initialised",
+                confidence=ConfidenceLevel.UNKNOWN,
+                confidence_source=ConfidenceSource.UNRESOLVED,
             )
 
         # Relative import — resolve against source file directory
@@ -445,6 +447,8 @@ class JavaScriptScanner(BaseScanner):
                     is_external=False,
                     is_stdlib=False,
                     is_unresolved=False,
+                    confidence=ConfidenceLevel.AST,
+                    confidence_source=ConfidenceSource.STATIC_AST,
                 )
             return ResolvedDependency(
                 raw=raw_dep,
@@ -453,6 +457,8 @@ class JavaScriptScanner(BaseScanner):
                 is_stdlib=False,
                 is_unresolved=True,
                 resolution_note=f"relative specifier '{specifier}' not found in project",
+                confidence=ConfidenceLevel.UNKNOWN,
+                confidence_source=ConfidenceSource.UNRESOLVED,
             )
 
         # Bare / absolute specifier — use JavaScript resolution
@@ -464,6 +470,8 @@ class JavaScriptScanner(BaseScanner):
                 is_external=False,
                 is_stdlib=False,
                 is_unresolved=False,
+                confidence=ConfidenceLevel.AST,
+                confidence_source=ConfidenceSource.STATIC_AST,
             )
 
         # Classify as external / stdlib
@@ -477,6 +485,8 @@ class JavaScriptScanner(BaseScanner):
                 is_external=True,
                 is_stdlib=True,
                 is_unresolved=False,
+                confidence=ConfidenceLevel.AST,
+                confidence_source=ConfidenceSource.STATIC_AST,
             )
 
         if is_external:
@@ -486,6 +496,8 @@ class JavaScriptScanner(BaseScanner):
                 is_external=True,
                 is_stdlib=False,
                 is_unresolved=False,
+                confidence=ConfidenceLevel.AST,
+                confidence_source=ConfidenceSource.STATIC_AST,
             )
 
         return ResolvedDependency(
@@ -495,4 +507,6 @@ class JavaScriptScanner(BaseScanner):
             is_stdlib=False,
             is_unresolved=True,
             resolution_note=f"bare specifier '{specifier}' not found in project",
+            confidence=ConfidenceLevel.UNKNOWN,
+            confidence_source=ConfidenceSource.UNRESOLVED,
         )

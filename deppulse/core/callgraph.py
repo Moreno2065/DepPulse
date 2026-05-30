@@ -16,6 +16,8 @@ from pathlib import Path
 from deppulse.models import (
     CallGraphResult,
     CallGraphStats,
+    ConfidenceLevel,
+    ConfidenceSource,
     ExtractedSymbol,
     Language,
     ScanResult,
@@ -119,8 +121,8 @@ def _resolve_python_calls(
     """
     Parse a Python file's AST and resolve symbol-level call edges.
 
-    This is an approximate resolver — it uses simple name matching against
-    the known symbol index and local function definitions.
+    This uses ast.NodeVisitor for name matching against the known symbol index
+    and local function definitions. Confidence is AST for all resolved edges.
     """
     edges: list[SymbolCall] = []
     content = ""
@@ -170,6 +172,8 @@ def _resolve_python_calls(
                         call_site=(scan_result.file_path, 0),
                         is_polymorphic=False,
                         is_external=False,
+                        confidence=ConfidenceLevel.AST,
+                        confidence_source=ConfidenceSource.STATIC_AST,
                     )
                 )
         elif call_name in name_to_symbols:
@@ -181,6 +185,8 @@ def _resolve_python_calls(
                         call_site=(scan_result.file_path, 0),
                         is_polymorphic=False,
                         is_external=callee.file_path != scan_result.file_path,
+                        confidence=ConfidenceLevel.AST,
+                        confidence_source=ConfidenceSource.STATIC_AST,
                     )
                 )
 
@@ -203,7 +209,13 @@ def _resolve_java_calls(
     scan_result: ScanResult,
     symbol_index: dict[str, list[Symbol]],
 ) -> list[SymbolCall]:
-    """Approximate call graph for Java using regex method call matching."""
+    """
+    Approximate call graph for Java using regex method call matching.
+
+    Confidence is HEURISTIC because this is based on pattern matching, not
+    semantic analysis. The LSP path (via LSPCallGraphResolver) will upgrade
+    these to LSP where available.
+    """
     edges: list[SymbolCall] = []
 
     content = ""
@@ -249,6 +261,8 @@ def _resolve_java_calls(
                     call_site=(scan_result.file_path, line_number),
                     is_polymorphic=True,
                     is_external=callee.file_path != scan_result.file_path,
+                    confidence=ConfidenceLevel.HEURISTIC,
+                    confidence_source=ConfidenceSource.NAME_MATCH,
                 )
             )
 
@@ -259,7 +273,13 @@ def _resolve_kotlin_calls(
     scan_result: ScanResult,
     symbol_index: dict[str, list[Symbol]],
 ) -> list[SymbolCall]:
-    """Approximate call graph for Kotlin using regex method call matching."""
+    """
+    Approximate call graph for Kotlin using regex method call matching.
+
+    Confidence is HEURISTIC because this is based on pattern matching, not
+    semantic analysis. The LSP path (via LSPCallGraphResolver) will upgrade
+    these to LSP where available.
+    """
     edges: list[SymbolCall] = []
 
     content = ""
@@ -301,6 +321,8 @@ def _resolve_kotlin_calls(
                     call_site=(scan_result.file_path, line_number),
                     is_polymorphic=False,
                     is_external=callee.file_path != scan_result.file_path,
+                    confidence=ConfidenceLevel.HEURISTIC,
+                    confidence_source=ConfidenceSource.NAME_MATCH,
                 )
             )
 

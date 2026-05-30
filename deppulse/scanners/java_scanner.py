@@ -9,6 +9,8 @@ import javalang
 
 from deppulse.core.path_resolver import PathResolver
 from deppulse.models import (
+    ConfidenceLevel,
+    ConfidenceSource,
     DependencyKind,
     ExtractedSymbol,
     Language,
@@ -286,6 +288,8 @@ class JavaScanner(BaseScanner):
                     is_external=False,
                     is_stdlib=False,
                     is_unresolved=False,
+                    confidence=ConfidenceLevel.AST,
+                    confidence_source=ConfidenceSource.STATIC_AST,
                 )
 
         # 2. Check stdlib
@@ -296,6 +300,8 @@ class JavaScanner(BaseScanner):
                 is_external=True,
                 is_stdlib=True,
                 is_unresolved=False,
+                confidence=ConfidenceLevel.AST,
+                confidence_source=ConfidenceSource.STATIC_AST,
             )
 
         # 3. Check external (third-party)
@@ -306,6 +312,8 @@ class JavaScanner(BaseScanner):
                 is_external=True,
                 is_stdlib=False,
                 is_unresolved=False,
+                confidence=ConfidenceLevel.AST,
+                confidence_source=ConfidenceSource.STATIC_AST,
             )
 
         # 4. Unresolved
@@ -316,4 +324,6 @@ class JavaScanner(BaseScanner):
             is_stdlib=False,
             is_unresolved=True,
             resolution_note=f"no project file found for {module}",
+            confidence=ConfidenceLevel.UNKNOWN,
+            confidence_source=ConfidenceSource.UNRESOLVED,
         )

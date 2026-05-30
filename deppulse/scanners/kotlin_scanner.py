@@ -28,6 +28,8 @@ from deppulse.core.ir import (
 from deppulse.core.path_resolver import PathResolver
 from deppulse.core.tree_sitter_parser import TreeSitterParser
 from deppulse.models import (
+    ConfidenceLevel,
+    ConfidenceSource,
     DependencyKind,
     ExtractedSymbol,
     Language,
@@ -687,6 +689,8 @@ class KotlinScanner(BaseScanner):
                 is_external=True,
                 is_stdlib=True,
                 is_unresolved=False,
+                confidence=ConfidenceLevel.AST,
+                confidence_source=ConfidenceSource.STATIC_AST,
             )
 
         # Try project file resolution FIRST
@@ -698,6 +702,8 @@ class KotlinScanner(BaseScanner):
                 is_external=False,
                 is_stdlib=False,
                 is_unresolved=False,
+                confidence=ConfidenceLevel.AST,
+                confidence_source=ConfidenceSource.STATIC_AST,
             )
 
         # Not found in project — check if it looks like external/third-party
@@ -709,6 +715,8 @@ class KotlinScanner(BaseScanner):
                 is_external=True,
                 is_stdlib=False,
                 is_unresolved=False,
+                confidence=ConfidenceLevel.AST,
+                confidence_source=ConfidenceSource.STATIC_AST,
             )
 
         # Fallback: unresolved import
@@ -719,6 +727,8 @@ class KotlinScanner(BaseScanner):
             is_stdlib=False,
             is_unresolved=True,
             resolution_note=f"no project file found for {specifier}",
+            confidence=ConfidenceLevel.UNKNOWN,
+            confidence_source=ConfidenceSource.UNRESOLVED,
         )
 
     # ------------------------------------------------------------------------

@@ -28,6 +28,8 @@ import networkx as nx
 if TYPE_CHECKING:
     from deppulse.models import DependencyKind, ScanResult
 
+from deppulse.models import ConfidenceLevel as ModelConfidenceLevel
+from deppulse.models import ConfidenceSource as ModelConfidenceSource
 
 # ---------------------------------------------------------------------------
 # Enums
@@ -88,6 +90,29 @@ class ImportKind(str, Enum):
     DYNAMIC_IMPORT = "dynamic_import"   # import('y')
 
     UNKNOWN = "unknown"
+
+
+class ConfidenceLevelIR(str, Enum):
+    """IR-level confidence levels (mirrors models.ConfidenceLevel for the IR layer)."""
+
+    LSP = "lsp"
+    AST = "ast"
+    HEURISTIC = "heuristic"
+    DYNAMIC = "dynamic"
+    UNKNOWN = "unknown"
+
+
+class ConfidenceSourceIR(str, Enum):
+    """IR-level confidence sources (mirrors models.ConfidenceSource for the IR layer)."""
+
+    STATIC_AST = "static_ast"
+    LSP_REFERENCES = "lsp_references"
+    LSP_CALL_HIERARCHY = "lsp_call_hierarchy"
+    REGEX_PATTERN = "regex_pattern"
+    NAME_MATCH = "name_match"
+    DYNAMIC_TRACE = "dynamic_trace"
+    RUNTIME_HOOK = "runtime_hook"
+    UNRESOLVED = "unresolved"
 
 
 # ---------------------------------------------------------------------------
@@ -215,6 +240,8 @@ class ImportEdge:
     is_stdlib: bool = False
     is_unresolved: bool = False
     resolution_note: str = ""  # e.g. "no project file found"
+    confidence: ConfidenceLevelIR | None = None
+    confidence_source: ConfidenceSourceIR | None = None
 
 
 @dataclass
@@ -230,6 +257,8 @@ class CallEdge:
     is_polymorphic: bool = False  # virtual dispatch (Java/C++ override)
     is_external: bool = False     # cross-module call
     call_site_file: str = ""      # project-relative path where the call occurs
+    confidence: ConfidenceLevelIR | None = None
+    confidence_source: ConfidenceSourceIR | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -474,8 +503,33 @@ def build_unified_ir(
 
         ir.file_nodes.append(fn)
 
+        # Map model confidence to IR confidence (defined once outside the loop)
+        conf_map: dict = {
+            ModelConfidenceLevel.LSP: ConfidenceLevelIR.LSP,
+            ModelConfidenceLevel.AST: ConfidenceLevelIR.AST,
+            ModelConfidenceLevel.HEURISTIC: ConfidenceLevelIR.HEURISTIC,
+            ModelConfidenceLevel.DYNAMIC: ConfidenceLevelIR.DYNAMIC,
+            ModelConfidenceLevel.UNKNOWN: ConfidenceLevelIR.UNKNOWN,
+        }
+        src_map: dict = {
+            ModelConfidenceSource.STATIC_AST: ConfidenceSourceIR.STATIC_AST,
+            ModelConfidenceSource.LSP_REFERENCES: ConfidenceSourceIR.LSP_REFERENCES,
+            ModelConfidenceSource.LSP_CALL_HIERARCHY: ConfidenceSourceIR.LSP_CALL_HIERARCHY,
+            ModelConfidenceSource.REGEX_PATTERN: ConfidenceSourceIR.REGEX_PATTERN,
+            ModelConfidenceSource.NAME_MATCH: ConfidenceSourceIR.NAME_MATCH,
+            ModelConfidenceSource.DYNAMIC_TRACE: ConfidenceSourceIR.DYNAMIC_TRACE,
+            ModelConfidenceSource.RUNTIME_HOOK: ConfidenceSourceIR.RUNTIME_HOOK,
+            ModelConfidenceSource.UNRESOLVED: ConfidenceSourceIR.UNRESOLVED,
+        }
+
         # Convert resolved dependencies → ImportEdge
         for dep in sr.resolved_dependencies:
+            conf_level: ConfidenceLevelIR | None = None
+            conf_src: ConfidenceSourceIR | None = None
+            if dep.confidence is not None:
+                conf_level = conf_map.get(dep.confidence)
+                conf_src = src_map.get(dep.confidence_source) if dep.confidence_source else None
+
             if dep.is_unresolved:
                 edge = ImportEdge(
                     from_file=sr.file_path,
@@ -486,6 +540,8 @@ def build_unified_ir(
                     is_external=True,
                     is_unresolved=True,
                     resolution_note=dep.resolution_note or "unresolved",
+                    confidence=conf_level,
+                    confidence_source=conf_src,
                 )
             elif dep.is_external:
                 edge = ImportEdge(
@@ -497,6 +553,8 @@ def build_unified_ir(
                     is_external=True,
                     is_stdlib=dep.is_stdlib,
                     resolution_note=dep.resolution_note or "",
+                    confidence=conf_level,
+                    confidence_source=conf_src,
                 )
             else:
                 edge = ImportEdge(
@@ -506,6 +564,8 @@ def build_unified_ir(
                     import_kind=_depkind_to_importkind(dep.raw.kind),
                     line=dep.raw.line_number,
                     is_external=False,
+                    confidence=conf_level,
+                    confidence_source=conf_src,
                 )
             ir.import_edges.append(edge)
 

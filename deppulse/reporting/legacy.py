@@ -106,6 +106,16 @@ def write_json_report(report: AuditReport, output_path: Path) -> None:
 
 def _audit_report_to_dict(report: AuditReport) -> dict:
     """Convert AuditReport to a JSON-serializable dict."""
+    def _dep_to_dict(d):
+        return {
+            "raw_text": d.raw.raw_text,
+            "kind": d.raw.kind.value,
+            "line_number": d.raw.line_number,
+            "resolution_note": d.resolution_note,
+            "confidence": d.confidence.value if d.confidence else None,
+            "confidence_source": d.confidence_source.value if d.confidence_source else None,
+        }
+
     return {
         "version": "1.0",
         "project_path": report.project_path,
@@ -121,23 +131,8 @@ def _audit_report_to_dict(report: AuditReport) -> dict:
             {"path": e.path, "count": e.count, "language": e.language.value}
             for e in report.top_outgoing
         ],
-        "unresolved_summary": [
-            {
-                "raw_text": d.raw.raw_text,
-                "kind": d.raw.kind.value,
-                "line_number": d.raw.line_number,
-                "resolution_note": d.resolution_note,
-            }
-            for d in report.unresolved_summary
-        ],
-        "external_summary": [
-            {
-                "raw_text": d.raw.raw_text,
-                "kind": d.raw.kind.value,
-                "line_number": d.raw.line_number,
-            }
-            for d in report.external_summary
-        ],
+        "unresolved_summary": [_dep_to_dict(d) for d in report.unresolved_summary],
+        "external_summary": [_dep_to_dict(d) for d in report.external_summary],
         "high_risk_files": report.high_risk_files,
     }
 
@@ -208,6 +203,46 @@ def audit_report_to_markdown(report: AuditReport) -> str:
     lines.append(f"| External edges | {stats.external_edges} |")
     lines.append(f"| Total symbols extracted | {stats.total_symbols} |")
     lines.append("")
+
+    # --- Confidence summary (from edge metadata)
+    lsp_count = 0
+    ast_count = 0
+    heuristic_count = 0
+    unknown_count = 0
+    for result in getattr(report, "scan_results", []):
+        for dep in result.resolved_dependencies:
+            conf_val = dep.confidence.value if dep.confidence else None
+            if conf_val == "lsp":
+                lsp_count += 1
+            elif conf_val == "ast":
+                ast_count += 1
+            elif conf_val == "heuristic":
+                heuristic_count += 1
+            else:
+                unknown_count += 1
+
+    if any([lsp_count, ast_count, heuristic_count, unknown_count]):
+        total_deps = lsp_count + ast_count + heuristic_count + unknown_count
+        lines.append("## Dependency Confidence Summary")
+        lines.append("")
+        lines.append(
+            "Analysis confidence is graded per edge. "
+            "LSP-confirmed edges are verified by the language's type system. "
+            "Unknown edges are statically unresolvable (e.g. dynamic imports)."
+        )
+        lines.append("")
+        lines.append("| Confidence | Count | Pct |")
+        lines.append("|------------|-------|-----|")
+        if total_deps > 0:
+            if lsp_count:
+                lines.append(f"| LSP (verified) | {lsp_count} | {lsp_count/total_deps*100:.1f}% |")
+            if ast_count:
+                lines.append(f"| AST/CST (parser) | {ast_count} | {ast_count/total_deps*100:.1f}% |")
+            if heuristic_count:
+                lines.append(f"| Heuristic (name match) | {heuristic_count} | {heuristic_count/total_deps*100:.1f}% |")
+            if unknown_count:
+                lines.append(f"| Unknown (unresolvable) | {unknown_count} | {unknown_count/total_deps*100:.1f}% |")
+        lines.append("")
 
     # --- Top depended-on files
     if report.top_depended_on:

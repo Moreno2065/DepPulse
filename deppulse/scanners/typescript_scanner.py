@@ -19,6 +19,8 @@ from deppulse.core.ir import (
 from deppulse.core.path_resolver import PathResolver
 from deppulse.core.tree_sitter_parser import TreeSitterParser
 from deppulse.models import (
+    ConfidenceLevel,
+    ConfidenceSource,
     DependencyKind,
     ExtractedSymbol,
     Language,
@@ -567,6 +569,8 @@ class TypeScriptScanner(BaseScanner):
                 is_external=True,
                 is_stdlib=True,
                 is_unresolved=False,
+                confidence=ConfidenceLevel.AST,
+                confidence_source=ConfidenceSource.STATIC_AST,
             )
 
         if self.resolver.is_external(specifier, "typescript"):
@@ -576,6 +580,8 @@ class TypeScriptScanner(BaseScanner):
                 is_external=True,
                 is_stdlib=False,
                 is_unresolved=False,
+                confidence=ConfidenceLevel.AST,
+                confidence_source=ConfidenceSource.STATIC_AST,
             )
 
         # Try relative resolution
@@ -588,6 +594,8 @@ class TypeScriptScanner(BaseScanner):
                     is_external=False,
                     is_stdlib=False,
                     is_unresolved=False,
+                    confidence=ConfidenceLevel.AST,
+                    confidence_source=ConfidenceSource.STATIC_AST,
                 )
 
         # Try absolute resolution (tsconfig paths, package resolution)
@@ -599,6 +607,8 @@ class TypeScriptScanner(BaseScanner):
                 is_external=False,
                 is_stdlib=False,
                 is_unresolved=False,
+                confidence=ConfidenceLevel.AST,
+                confidence_source=ConfidenceSource.STATIC_AST,
             )
 
         # Unresolved
@@ -609,6 +619,8 @@ class TypeScriptScanner(BaseScanner):
             is_stdlib=False,
             is_unresolved=True,
             resolution_note=f"no project file found for {specifier}",
+            confidence=ConfidenceLevel.UNKNOWN,
+            confidence_source=ConfidenceSource.UNRESOLVED,
         )
 
     def resolve_dependency(

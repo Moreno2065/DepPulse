@@ -131,6 +131,8 @@ def _build_results(result: GraphBuildResult, root: str) -> list[dict]:
                     "properties": {
                         "dependency": dep.normalized_path,
                         "kind": dep.raw.kind.value,
+                        "confidence": dep.confidence.value if dep.confidence else "none",
+                        "confidence_source": dep.confidence_source.value if dep.confidence_source else "none",
                     },
                 })
 
@@ -152,6 +154,8 @@ def _build_results(result: GraphBuildResult, root: str) -> list[dict]:
                     "dependency": dep.raw.raw_text,
                     "kind": dep.raw.kind.value,
                     "isStdlib": dep.is_stdlib,
+                    "confidence": dep.confidence.value if dep.confidence else "none",
+                    "confidence_source": dep.confidence_source.value if dep.confidence_source else "none",
                 },
             })
 
@@ -173,6 +177,8 @@ def _build_results(result: GraphBuildResult, root: str) -> list[dict]:
                     "dependency": dep.raw.raw_text,
                     "kind": dep.raw.kind.value,
                     "note": dep.resolution_note or "",
+                    "confidence": dep.confidence.value if dep.confidence else "none",
+                    "confidence_source": dep.confidence_source.value if dep.confidence_source else "none",
                 },
             })
 
@@ -310,6 +316,12 @@ def _dependency_rule_id(dep: ResolvedDependency) -> str:
 
 def _dependency_to_result(dep: ResolvedDependency, file_path: str) -> dict:
     """Convert a single ResolvedDependency to a SARIF result."""
+    props = {
+        "dependency": dep.normalized_path or dep.raw.raw_text,
+        "kind": dep.raw.kind.value,
+        "confidence": dep.confidence.value if dep.confidence else "none",
+        "confidence_source": dep.confidence_source.value if dep.confidence_source else "none",
+    }
     return {
         "ruleId": _dependency_rule_id(dep),
         "level": _dependency_level(dep),
@@ -318,10 +330,7 @@ def _dependency_to_result(dep: ResolvedDependency, file_path: str) -> dict:
             "artifactLocation": {"uri": file_path},
             "region": {"startLine": dep.raw.line_number},
         }],
-        "properties": {
-            "dependency": dep.normalized_path or dep.raw.raw_text,
-            "kind": dep.raw.kind.value,
-        },
+        "properties": props,
     }
 
 

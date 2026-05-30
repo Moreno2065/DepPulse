@@ -9,6 +9,8 @@ from pathlib import Path
 
 from deppulse.core.path_resolver import PathResolver
 from deppulse.models import (
+    ConfidenceLevel,
+    ConfidenceSource,
     DependencyKind,
     DynamicImport,
     ExtractedSymbol,
@@ -360,11 +362,16 @@ class PyImportVisitor(ast.NodeVisitor):
                 is_external=True,
                 is_stdlib=True,
                 is_unresolved=False,
+                confidence=ConfidenceLevel.AST,
+                confidence_source=ConfidenceSource.STATIC_AST,
             )
 
         parts = module_name.split(".")
         if not parts:
-            return self._unresolved_result(module_name, "empty module name")
+            result = self._unresolved_result(module_name, "empty module name")
+            result.confidence = ConfidenceLevel.UNKNOWN
+            result.confidence_source = ConfidenceSource.UNRESOLVED
+            return result
 
         # Try package/__init__.py first, then package/module.py
         candidates = [
@@ -382,6 +389,8 @@ class PyImportVisitor(ast.NodeVisitor):
                         is_external=False,
                         is_stdlib=False,
                         is_unresolved=False,
+                        confidence=ConfidenceLevel.AST,
+                        confidence_source=ConfidenceSource.STATIC_AST,
                     )
             else:
                 direct = self.project_root / candidate
@@ -393,9 +402,14 @@ class PyImportVisitor(ast.NodeVisitor):
                         is_external=False,
                         is_stdlib=False,
                         is_unresolved=False,
+                        confidence=ConfidenceLevel.AST,
+                        confidence_source=ConfidenceSource.STATIC_AST,
                     )
 
-        return self._unresolved_result(module_name, f"no project file found for {module_name}")
+        result = self._unresolved_result(module_name, f"no project file found for {module_name}")
+        result.confidence = ConfidenceLevel.UNKNOWN
+        result.confidence_source = ConfidenceSource.UNRESOLVED
+        return result
 
     def _resolve_relative(
         self,
@@ -444,6 +458,8 @@ class PyImportVisitor(ast.NodeVisitor):
                         is_external=False,
                         is_stdlib=False,
                         is_unresolved=False,
+                        confidence=ConfidenceLevel.AST,
+                        confidence_source=ConfidenceSource.STATIC_AST,
                     )
 
             # file_index miss: fall back to filesystem (handles files scanned but
@@ -458,12 +474,17 @@ class PyImportVisitor(ast.NodeVisitor):
                         is_external=False,
                         is_stdlib=False,
                         is_unresolved=False,
+                        confidence=ConfidenceLevel.AST,
+                        confidence_source=ConfidenceSource.STATIC_AST,
                     )
 
             # No match found anywhere
-            return self._unresolved_result(
+            result = self._unresolved_result(
                 module_name, f"relative import unresolved: {module_name} (level={level})"
             )
+            result.confidence = ConfidenceLevel.UNKNOWN
+            result.confidence_source = ConfidenceSource.UNRESOLVED
+            return result
         else:
             # No file index: do direct filesystem resolution
             init_path = candidate_rel / "__init__.py"
@@ -478,6 +499,8 @@ class PyImportVisitor(ast.NodeVisitor):
                     is_external=False,
                     is_stdlib=False,
                     is_unresolved=False,
+                    confidence=ConfidenceLevel.AST,
+                    confidence_source=ConfidenceSource.STATIC_AST,
                 )
             if mod_path.exists():
                 raw_dep = self._get_last_raw()
@@ -488,12 +511,17 @@ class PyImportVisitor(ast.NodeVisitor):
                     is_external=False,
                     is_stdlib=False,
                     is_unresolved=False,
+                    confidence=ConfidenceLevel.AST,
+                    confidence_source=ConfidenceSource.STATIC_AST,
                 )
 
-            return self._unresolved_result(
+            result = self._unresolved_result(
                 module_name,
                 f"relative import unresolved: {module_name} (level={level})",
             )
+            result.confidence = ConfidenceLevel.UNKNOWN
+            result.confidence_source = ConfidenceSource.UNRESOLVED
+            return result
 
     def _unresolved_result(self, module_name: str, note: str) -> ResolvedDependency:
         raw_dep = self._get_last_raw()
@@ -504,6 +532,8 @@ class PyImportVisitor(ast.NodeVisitor):
             is_stdlib=module_name in _STDLIB_MODULES,
             is_unresolved=True,
             resolution_note=note,
+            confidence=ConfidenceLevel.UNKNOWN,
+            confidence_source=ConfidenceSource.UNRESOLVED,
         )
 
     def _get_last_raw(self) -> RawDependency:
