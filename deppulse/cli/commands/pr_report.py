@@ -62,7 +62,7 @@ def handle(args: argparse.Namespace) -> int:
         ui.console.print("[green]No changed files detected against base branch.[/green]")
         return 0
 
-    result, graph, _elapsed = run_scan(project_path, config, use_cache=args.use_cache)
+    result, graph, _elapsed = run_scan(project_path, config, use_cache=args.use_cache, debug=args.debug)
 
     reporter = PRReporter(graph, config=config)
     report = reporter.generate(changed_files, base_ref=args.base)

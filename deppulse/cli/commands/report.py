@@ -48,7 +48,7 @@ def handle(args: argparse.Namespace) -> int:
     if args.ci:
         ui.set_ci_mode(True)
 
-    result, graph, elapsed = run_scan(args.path, config, use_cache=args.use_cache)
+    result, graph, elapsed = run_scan(args.path, config, use_cache=args.use_cache, debug=args.debug)
 
     cycle_report = find_cycles(graph) if args.include_cycles else None
 

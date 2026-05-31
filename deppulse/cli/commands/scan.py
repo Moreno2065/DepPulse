@@ -74,7 +74,7 @@ def handle(args: argparse.Namespace) -> int:
         else:
             ui.console.print("[dim]No changed files found.[/dim]")
 
-    result, graph, elapsed = run_scan(args.path, config, use_cache=args.use_cache, files_to_scan=files_to_scan)
+    result, graph, elapsed = run_scan(args.path, config, use_cache=args.use_cache, files_to_scan=files_to_scan, debug=args.debug)
 
     if args.sarif_output:
         sarif_dict = graph_to_sarif(result)

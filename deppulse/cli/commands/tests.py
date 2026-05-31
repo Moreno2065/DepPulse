@@ -73,7 +73,7 @@ def handle(args: argparse.Namespace) -> int:
         return 0
 
     config = DepPulseConfig.from_path(project_path)
-    result, graph, _elapsed = run_scan(project_path, config, use_cache=args.use_cache)
+    result, graph, _elapsed = run_scan(project_path, config, use_cache=args.use_cache, debug=args.debug)
 
     selector = TestSelector(graph, config=config)
     test_result = selector.select_tests(

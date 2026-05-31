@@ -41,7 +41,10 @@ def find_cycles(
     # simple_cycles returns each cycle as a list of nodes
     try:
         raw_cycles = list(nx.simple_cycles(graph))
+    except nx.NetworkXError:
+        raw_cycles = []
     except Exception:
+        # Catch any other unexpected errors to prevent crash
         raw_cycles = []
 
     # Deduplicate cycles (simple_cycles may return equivalent cycles)

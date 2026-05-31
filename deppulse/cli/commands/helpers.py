@@ -17,9 +17,10 @@ def run_scan(
     config: DepPulseConfig,
     use_cache: bool,
     files_to_scan: set[str] | None = None,
+    debug: bool = False,
 ) -> tuple[GraphBuildResult, nx.DiGraph, float]:
     """Run the orchestrator scan and return results with timing."""
-    orchestrator = DependencyOrchestrator(config=config, use_cache=use_cache)
+    orchestrator = DependencyOrchestrator(config=config, use_cache=use_cache, debug=debug)
     start = time.monotonic()
     result = orchestrator.scan(project_path, files_to_scan=files_to_scan)
     elapsed = time.monotonic() - start

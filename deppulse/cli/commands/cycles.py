@@ -32,7 +32,7 @@ def handle(args: argparse.Namespace) -> int:
     if args.ci:
         ui.set_ci_mode(True)
 
-    result, graph, _elapsed = run_scan(args.path, config, use_cache=args.use_cache)
+    result, graph, _elapsed = run_scan(args.path, config, use_cache=args.use_cache, debug=args.debug)
 
     cycle_report = find_cycles(graph)
 

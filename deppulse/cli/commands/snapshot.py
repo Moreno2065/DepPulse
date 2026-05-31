@@ -54,7 +54,7 @@ def handle(args: argparse.Namespace) -> int:
 
     if args.snapshot_cmd == "save":
         config = DepPulseConfig.from_path(project_path)
-        result, graph, _elapsed = run_scan(project_path, config, use_cache=args.use_cache)
+        result, graph, _elapsed = run_scan(project_path, config, use_cache=args.use_cache, debug=args.debug)
         meta = manager.save(result, tag=args.tag)
         ui.render_snapshot_meta(meta)
         ui.console.print(f"[green]Snapshot saved: {meta.tag}[/green]")
@@ -88,7 +88,7 @@ def handle(args: argparse.Namespace) -> int:
         if args.ci:
             _ui.set_ci_mode(True)
         config = DepPulseConfig.from_path(project_path)
-        result, graph, _elapsed = run_scan(project_path, config, use_cache=args.use_cache)
+        result, graph, _elapsed = run_scan(project_path, config, use_cache=args.use_cache, debug=args.debug)
         diff, alerts = manager.check_trends(args.since_tag)
         ui.render_snapshot_diff(diff)
         ui.render_trend_alerts(alerts)

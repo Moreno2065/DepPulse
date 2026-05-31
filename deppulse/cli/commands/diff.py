@@ -57,7 +57,7 @@ def handle(args: argparse.Namespace) -> int:
         return 0
 
     config = DepPulseConfig.from_path(project_path)
-    result, graph, _elapsed = run_scan(project_path, config, use_cache=args.use_cache)
+    result, graph, _elapsed = run_scan(project_path, config, use_cache=args.use_cache, debug=args.debug)
 
     graph_files = set(graph.nodes())
     found = [f for f in changed_files if f in graph_files]

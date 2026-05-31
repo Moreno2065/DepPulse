@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 CacheData = dict[str, Any]
 
@@ -57,9 +60,11 @@ class ScanCache:
                     )
                 except (KeyError, TypeError):
                     # Corrupted entry — skip
+                    logger.debug(f"Corrupted cache entry for {path}, skipping")
                     continue
         except (json.JSONDecodeError, OSError):
             # Corrupted cache — ignore and rebuild
+            logger.debug(f"Corrupted cache file {cache_file}, rebuilding")
             pass
 
         return instance

@@ -13,6 +13,9 @@
 - [调用图](#调用图)
 - [爆炸半径](#爆炸半径)
 - [风险评分](#风险评分)
+- [测试选择](#测试选择)
+- [快照管理](#快照管理)
+- [PR 报告](#pr-报告)
 - [扫描器限制](#扫描器限制)
 - [配置](#配置)
 - [缓存](#缓存)
@@ -66,6 +69,16 @@ deppulse callgraph ./my-project
 
 # 可视化依赖图
 deppulse viz ./my-project --format html
+
+# 选择受影响的测试
+deppulse tests ./my-project --since main
+
+# 管理依赖快照
+deppulse snapshot save ./my-project --tag v1.0.0
+deppulse snapshot diff ./my-project --from v1.0.0 --to v1.1.0
+
+# 生成 PR 影响报告
+deppulse pr-report ./my-project --base main
 ```
 
 ---
@@ -160,6 +173,51 @@ deppulse viz ./my-project --depth 2                # 仅显示 2 跳邻居
 
 ```bash
 deppulse doctor ./my-project
+```
+
+### `deppulse tests <路径>`
+
+基于变更文件选择需要运行的测试。支持通过 git diff 或显式指定文件来确定变更，并返回受影响的测试列表。
+
+```bash
+deppulse tests ./my-project              # 使用工作区变更
+deppulse tests ./my-project --since main # 与 main 分支对比
+deppulse tests ./my-project --files src/a.py src/b.py
+deppulse tests ./my-project --format args   # 输出为命令行参数格式
+deppulse tests ./my-project --format json   # JSON 输出
+deppulse tests ./my-project --ci            # CI 模式
+```
+
+### `deppulse snapshot <子命令> <路径>`
+
+管理依赖图快照，用于趋势监控和依赖健康度追踪。
+
+```bash
+# 保存快照
+deppulse snapshot save ./my-project --tag v1.0.0
+
+# 列出所有快照
+deppulse snapshot list ./my-project
+
+# 对比两个快照
+deppulse snapshot diff ./my-project --from v1.0.0 --to v1.1.0
+deppulse snapshot diff ./my-project --from v1.0.0 --to v1.1.0 --json
+
+# CI 模式检查趋势
+deppulse snapshot check ./my-project --since-tag v1.0.0 --ci
+```
+
+### `deppulse pr-report <路径>`
+
+生成 PR 影响报告，用于代码审查。分析当前分支与基础分支的差异，提供爆炸半径和风险评估。
+
+```bash
+deppulse pr-report ./my-project
+deppulse pr-report ./my-project --base main
+deppulse pr-report ./my-project --format markdown
+deppulse pr-report ./my-project --format json
+deppulse pr-report ./my-project --fail-on-high-risk  # 高风险时返回非零退出码
+deppulse pr-report ./my-project --ci
 ```
 
 ---
@@ -259,17 +317,117 @@ blast_radius = (1 + 3) / 17 * 100 = 23.5%
 
 ---
 
+## 测试选择
+
+`deppulse tests` 命令基于变更文件智能选择需要运行的测试，避免全量测试运行，加速 CI/CD 流程。
+
+### 选择策略
+
+1. **文件级依赖分析**：识别所有依赖变更文件的测试文件
+2. **符号级匹配**：通过调用图分析，精确定位受变更符号影响的测试
+3. **爆炸半径阈值**：当受影响测试超过阈值时，自动回退到全量测试
+
+### 覆盖率置信度
+
+输出包含 `coverage_confidence` 分数（0-1），表示测试选择的置信度：
+- **> 0.8**：高置信度，可以放心使用选择的测试
+- **0.5-0.8**：中等置信度，建议检查
+- **< 0.5**：低置信度，建议运行更多测试
+
+### 输出格式
+
+- **list**：人类可读的测试列表（默认）
+- **args**：命令行参数格式，可直接传递给测试运行器：`pytest $(deppulse tests --format args)`
+- **json**：机器可读的 JSON 输出，包含选择策略和置信度
+
+---
+
+## 快照管理
+
+`deppulse snapshot` 用于管理依赖图的历史快照，追踪项目的依赖健康度趋势。
+
+### 快照内容
+
+每个快照包含：
+- 提交哈希和时间戳
+- 总文件数和边数
+- 循环依赖列表
+- UnifiedIR 数据
+
+### 快照对比
+
+对比两个快照可检测：
+- 新增/删除的文件和依赖
+- 新增的循环依赖（潜在风险）
+- 依赖图规模变化趋势
+
+### CI 集成
+
+```yaml
+- name: Check dependency trends
+  run: |
+    pip install deppulse
+    deppulse snapshot check ./ --since-tag v1.0.0 --ci
+```
+
+检测到关键趋势变化（如新增循环依赖）时返回非零退出码，可用于阻断构建。
+
+---
+
+## PR 报告
+
+`deppulse pr-report` 生成专为代码审查设计的变更影响报告。
+
+### 报告内容
+
+- 变更文件列表
+- 受影响文件数量和爆炸半径
+- 风险评分和等级
+- 建议审查的测试列表
+- 高风险依赖项警告
+
+### 输出格式
+
+- **github-comment**：GitHub PR 评论格式（默认）
+- **markdown**：标准 Markdown 格式
+- **json**：机器可读格式
+
+### CI 集成
+
+```yaml
+- name: Generate PR impact report
+  run: deppulse pr-report ./ --base main --fail-on-high-risk
+```
+
+`--fail-on-high-risk` 选项在高风险变更时返回非零退出码，可用于自动化审查流程。
+
+---
+
 ## 扫描器限制
 
 ### Python 扫描器
 
-Python 扫描器使用 `ast.parse()` 提取导入语句和符号，有以下限制：
+Python 扫描器使用 `ast.parse()` 和 tree-sitter 提取导入语句和符号，有以下限制：
 
 - **宏展开的导入**（如 `if sys.version_info >= (3, 10):` 内的导入）不会被求值——扫描器读取的是原始源代码文本
 - **动态导入**（`__import__()` 或 `importlib.import_module()`）不会被检测
 - **命名空间包**（无 `__init__.py`）可能无法正确解析
 - **第三方 stub 文件**（`.pyi`）会作为普通 Python 文件被扫描
 - 符号提取仅限于顶层函数、类和类方法；嵌套函数和闭包被有意排除
+
+### JavaScript/TypeScript 扫描器
+
+JavaScript 和 TypeScript 扫描器使用 tree-sitter 进行 AST 解析：
+
+- **语言支持**：`.js`、`.jsx`、`.mjs`、`.ts`、`.tsx` 文件；跳过 `.d.ts` 声明文件
+- **ESM 导入**：支持 `import`、`import type`、动态 `import()`
+- **CommonJS**：支持 `require()` 调用
+- **路径解析**：支持相对路径（`./foo`、`../bar`）和路径别名（需配置）
+- **符号提取**：函数、类、接口、类型别名、变量声明
+- **限制**：
+  - 复杂的动态路径可能无法解析
+  - 某些元编程模式（如字符串拼接的 require）无法检测
+  - 全局隐式依赖（如 CDN 加载的库）不会被跟踪
 
 ### Java 扫描器
 
@@ -358,8 +516,6 @@ DepPulse 通过 SARIF 输出格式与 GitHub Actions 集成：
     sarif_file: deppulse-results.sarif
 ```
 
-完整 workflow 示例见 [`.github/workflows/deppulse-ci.yml`](.github/workflows/deppulse-ci.yml)，包含高风险依赖检测逻辑。
-
 ### Pre-commit Hook
 
 DepPulse 可通过 `.pre-commit-hooks.yaml` 格式作为 pre-commit hook 使用：
@@ -440,8 +596,8 @@ deppulse viz ./ --format html --output dashboard.html
 ## 开发
 
 ```bash
-# 安装开发依赖
-pip install -r requirements-dev.txt
+# 安装开发依赖（推荐）
+pip install -e ".[dev]"
 
 # 运行测试
 pytest -q
@@ -454,6 +610,9 @@ ruff check deppulse/
 
 # 格式化代码
 ruff format deppulse/
+
+# 类型检查
+mypy deppulse/
 ```
 
 ### 项目结构
@@ -462,7 +621,24 @@ ruff format deppulse/
 deppulse/
 ├── __init__.py          # 版本信息
 ├── __main__.py          # python -m deppulse 入口
-├── cli.py               # argparse CLI，所有子命令
+├── cli.py               # CLI 入口和命令注册
+├── cli/
+│   ├── __init__.py
+│   ├── __main__.py      # 替代入口
+│   └── commands/        # 子命令实现
+│       ├── __init__.py
+│       ├── scan.py      # scan 命令
+│       ├── trace.py     # trace 命令
+│       ├── diff.py      # diff 命令
+│       ├── cycles.py    # cycles 命令
+│       ├── report.py    # report 命令
+│       ├── callgraph.py # callgraph 命令
+│       ├── viz.py       # viz 命令
+│       ├── tests.py     # tests 命令
+│       ├── snapshot.py  # snapshot 命令
+│       ├── pr_report.py # pr-report 命令
+│       ├── doctor.py    # doctor 命令
+│       └── helpers.py   # 共享辅助函数
 ├── config.py            # 配置加载
 ├── cache.py             # 文件缓存
 ├── git.py               # 通过子进程集成 git
@@ -472,18 +648,33 @@ deppulse/
 │   ├── legacy.py        # JSON 和 Markdown 报告生成
 │   └── sarif.py         # SARIF 2.1.0 输出生成
 ├── core/
+│   ├── __init__.py
 │   ├── orchestrator.py  # 使用 networkx 构建图、扫描器注册
 │   ├── analyzer.py      # 影响分析和爆炸半径
 │   ├── risk.py          # 透明的风险评分
 │   ├── cycles.py        # 循环检测
-│   └── callgraph.py     # 符号级调用图构建器
+│   ├── callgraph.py     # 符号级调用图构建器
+│   ├── ir.py            # UnifiedIR - 统一的中间表示
+│   ├── tree_sitter_parser.py  # Tree-sitter 解析器基类
+│   ├── path_resolver.py       # 路径解析（含别名支持）
+│   ├── test_selector.py         # 测试选择逻辑
+│   ├── snapshot.py              # 快照管理
+│   ├── pr_reporter.py           # PR 报告生成
+│   ├── hotspot_analyzer.py      # 热点分析
+│   ├── diff_parser.py           # Diff 解析
+│   ├── lsp_client.py            # LSP 客户端（实验性）
+│   └── lsp_resolver.py          # LSP 符号解析（实验性）
 ├── scanners/
-│   ├── base.py         # BaseScanner 抽象类（策略模式）
-│   ├── python_scanner.py # Python AST 扫描器
-│   ├── cpp_scanner.py   # C/C++ 正则扫描器
-│   ├── java_scanner.py  # Java javalang AST 扫描器
-│   └── kotlin_scanner.py # Kotlin 正则扫描器
+│   ├── __init__.py
+│   ├── base.py          # BaseScanner 抽象类（策略模式）
+│   ├── python_scanner.py     # Python AST/tree-sitter 扫描器
+│   ├── cpp_scanner.py        # C/C++ 正则扫描器
+│   ├── java_scanner.py       # Java javalang AST 扫描器
+│   ├── kotlin_scanner.py     # Kotlin 正则扫描器
+│   ├── javascript_scanner.py # JavaScript tree-sitter 扫描器
+│   └── typescript_scanner.py # TypeScript tree-sitter 扫描器
 └── ui/
+    ├── __init__.py
     ├── render.py        # Rich 终端渲染
     └── visualize.py     # Mermaid、DOT、HTML 可视化
 
@@ -491,19 +682,7 @@ tests/
 ├── fixtures/
 │   ├── python_project/   # 带循环和语法错误的 Python 测试夹具
 │   └── mixed_project/    # 混合 Python + C/C++ 测试夹具
-├── test_python_scanner.py
-├── test_cpp_scanner.py
-├── test_java_scanner.py
-├── test_kotlin_scanner.py
-├── test_orchestrator.py
-├── test_analyzer.py
-├── test_callgraph.py
-├── test_git.py
-├── test_risk.py
-├── test_cache.py
-├── test_cycles.py
-├── test_incremental.py
-└── test_sarif.py
+└── test_*.py             # 各模块测试文件
 ```
 
 ### 新增扫描器
@@ -511,7 +690,9 @@ tests/
 实现 `BaseScanner` 抽象类即可：
 
 ```python
+from pathlib import Path
 from deppulse.scanners.base import BaseScanner
+from deppulse.models import ScanResult
 
 class MyLangScanner(BaseScanner):
     name = "mylang"
@@ -533,6 +714,8 @@ _SCANNER_REGISTRY = [
     CppScanner(),
     JavaScanner(),
     KotlinScanner(),
+    JavaScriptScanner(),  # 新增
+    TypeScriptScanner(),  # 新增
     MyLangScanner(),  # <-- 在此添加
 ]
 ```
@@ -543,19 +726,21 @@ _SCANNER_REGISTRY = [
 
 ## 路线图
 
-以下功能已在 v0.2.0 中完成：
+以下功能已在 v1.1.0 中完成：
 
-- **Java/Kotlin 扫描器** — 使用 javalang（Java）和正则（Kotlin）提取 JVM 语言的 `import` 和 `package` 语句
-- **符号级调用图** — 将依赖分析扩展到函数/方法调用关系
-- **CI 集成** — GitHub Actions workflow 和 pre-commit hook
-- **SARIF 输出** — 用于安全和质量工具的机器可读格式
-- **增量 diff 模式** — 通过 `--incremental` 和 `--since` 仅重新扫描变更文件
+- **CLI 重构** — 将 monolithic cli.py 拆分为 commands 包结构，提高可维护性
+- **JavaScript/TypeScript 扫描器** — 基于 tree-sitter 的 AST 解析，支持 ESM 和 CommonJS
+- **UnifiedIR** — 统一的中间表示，支持置信度和来源追踪
+- **测试选择** — `deppulse tests` 命令，基于变更智能选择需要运行的测试
+- **快照管理** — `deppulse snapshot` 命令，追踪依赖图趋势变化
+- **PR 报告** — `deppulse pr-report` 命令，生成代码审查影响报告
+- **路径别名解析** — TypeScript/JavaScript 路径别名支持
 
 计划在后续版本中实现：
 
-- **Web UI 仪表盘** — 交互式依赖可视化（v0.2.0 已提供基础 HTML + D3.js）
-- **JavaScript/TypeScript 扫描器** — 基于 AST 的 import/export 提取
 - **依赖健康指标** — 不稳定性、抽象性到主序列的距离（DAM）
+- **更多语言支持** — Rust、Go 等
+- **增量分析增强** — 更智能的变更影响预测
 
 ---
 

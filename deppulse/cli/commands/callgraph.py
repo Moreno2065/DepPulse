@@ -55,7 +55,7 @@ def handle(args: argparse.Namespace) -> int:
     if args.ci:
         ui.set_ci_mode(True)
 
-    result, graph, _elapsed = run_scan(args.path, config, use_cache=args.use_cache)
+    result, graph, _elapsed = run_scan(args.path, config, use_cache=args.use_cache, debug=args.debug)
 
     builder = CallGraphBuilder(scan_results=result.scan_results, project_root=str(args.path.resolve()))
     cg_result = builder.build()

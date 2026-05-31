@@ -72,9 +72,11 @@ class DependencyOrchestrator:
         self,
         config: DepPulseConfig | None = None,
         use_cache: bool = True,
+        debug: bool = False,
     ) -> None:
         self.config = config or DepPulseConfig(project_root=Path.cwd())
         self.use_cache = use_cache
+        self._debug = debug
         self._cache: ScanCache | None = None
         self._file_index: dict[str, Path] = {}  # normalized POSIX path -> absolute Path
         self._warnings: list[str] = []
@@ -138,7 +140,11 @@ class DependencyOrchestrator:
                     if result.error:
                         errors += 1
                 except Exception as e:
-                    self.warnings.append(f"Scan failed for {f}: {e}")
+                    import traceback
+                    error_msg = f"Scan failed for {f}: {e}"
+                    if self._debug:
+                        error_msg += f"\n{traceback.format_exc()}"
+                    self.warnings.append(error_msg)
                     errors += 1
 
         # Phase 2.5: build UnifiedIR from scan results
@@ -305,6 +311,11 @@ class DependencyOrchestrator:
                 if resolved.normalized_path is None:
                     continue
                 if resolved.normalized_path not in graph:
+                    # Verify the ghost node path actually exists before creating
+                    ghost_abs_path = project_root / resolved.normalized_path
+                    if not ghost_abs_path.exists():
+                        # Skip creating ghost node for non-existent files
+                        continue
                     # Create a ghost node for unresolved-but-known internal deps
                     ghost_meta = NodeMetadata(
                         path=resolved.normalized_path,

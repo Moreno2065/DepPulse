@@ -6,7 +6,6 @@ from TypeScript (.ts) and TSX (.tsx) files. Skips .d.ts declaration files.
 
 from __future__ import annotations
 
-import contextlib
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -86,12 +85,9 @@ class TypeScriptTreeSitterParser(TreeSitterParser):
         self,
         tree: Tree,
         file_path: str,
+        source: bytes,
     ) -> list[RawImport]:
         imports: list[RawImport] = []
-        source = b""
-        if Path(file_path).exists():
-            with contextlib.suppress(OSError):
-                source = Path(file_path).read_bytes()
 
         for node in self._all_nodes_of_type(tree, "import_statement"):
             raw_text = self._node_text(node, source).strip()
@@ -165,11 +161,6 @@ class TypeScriptTreeSitterParser(TreeSitterParser):
 
         # Handle CommonJS: const x = require('y')
         for node in self._all_nodes_of_type(tree, "variable_declarator"):
-            source_bytes = b""
-            if Path(file_path).exists():
-                with contextlib.suppress(OSError):
-                    source_bytes = Path(file_path).read_bytes()
-
             init = self._find_child_by_type(node, "call_expression")
             if init is None:
                 continue
@@ -178,7 +169,7 @@ class TypeScriptTreeSitterParser(TreeSitterParser):
             if func_name_node is None:
                 continue
 
-            func_name = self._node_text(func_name_node, source_bytes)
+            func_name = self._node_text(func_name_node, source)
             if func_name != "require":
                 continue
 
@@ -186,10 +177,10 @@ class TypeScriptTreeSitterParser(TreeSitterParser):
             if string_node is None:
                 continue
 
-            specifier = self._node_text(string_node, source_bytes).strip('"\'')
+            specifier = self._node_text(string_node, source).strip('"\'')
             raw_text = f"const ... = require('{specifier}')"
-            line = self._node_line(node, source_bytes)
-            column = self._node_column(node, source_bytes)
+            line = self._node_line(node, source)
+            column = self._node_column(node, source)
 
             imports.append(
                 RawImport(
@@ -208,12 +199,9 @@ class TypeScriptTreeSitterParser(TreeSitterParser):
         self,
         tree: Tree,
         file_path: str,
+        source: bytes,
     ) -> list[RawSymbol]:
         symbols: list[RawSymbol] = []
-        source = b""
-        if Path(file_path).exists():
-            with contextlib.suppress(OSError):
-                source = Path(file_path).read_bytes()
 
         # Extract interface declarations
         for node in self._all_nodes_of_type(tree, "interface_declaration"):
@@ -495,8 +483,11 @@ class TypeScriptScanner(BaseScanner):
                 error=str(e),
             )
 
+        # Read source bytes once for extraction
+        source = file_path.read_bytes()
+
         # Extract imports
-        raw_imports = self.parser.extract_imports(tree, rel_posix)
+        raw_imports = self.parser.extract_imports(tree, rel_posix, source)
         for raw_import in raw_imports:
             raw_deps.append(
                 RawDependency(
@@ -516,7 +507,7 @@ class TypeScriptScanner(BaseScanner):
             resolved_deps.append(resolved)
 
         # Extract symbols
-        raw_symbols = self.parser.extract_symbols(tree, rel_posix)
+        raw_symbols = self.parser.extract_symbols(tree, rel_posix, source)
         for raw_sym in raw_symbols:
             sym_type_map = {
                 SymType.FUNCTION: "function",
