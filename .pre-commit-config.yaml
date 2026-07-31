@@ -3,7 +3,7 @@ repos:
     hooks:
       - id: deppulse-scan
         name: DepPulse dependency scan
-        entry: python -m deppulse scan --json-output .deppulse/scan.json
+        entry: python -m deppulse report --json-output .deppulse/scan.json
         language: system
         files: '\.(py|java|kt|cpp|h|hpp)$'
         pass_filenames: false
