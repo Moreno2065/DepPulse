@@ -47,3 +47,9 @@ deppulse-dashboard.html
 # Temporary tool directories
 .superpowers/
 .claude/
+
+# Claude Code
+CLAUDE.md
+
+# Development specs and plans
+docs/superpowers/
