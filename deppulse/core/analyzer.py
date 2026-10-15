@@ -72,7 +72,7 @@ class ImpactAnalyzer:
 
         chains = self._compute_impact_chains(all_affected_list, normalized, max_chains)
 
-        blast_radius = (len(all_affected) / cc_size * 100) if cc_size > 0 else 0.0
+        blast_radius = ((len(all_affected) + 1) / cc_size * 100) if cc_size > 0 else 0.0
 
         return PerFileImpact(
             mutated_file=normalized,
@@ -112,7 +112,8 @@ class ImpactAnalyzer:
             pfi = self.analyze_file(f, max_chains=max_chains, cc_size_cache=cc_size_cache)
             per_file.append(pfi)
             all_affected.update(pfi.affected_files)
-            all_affected.update([f])
+            if pfi.mutated_file in self.graph:
+                all_affected.add(pfi.mutated_file)
             cc_size = max(cc_size, pfi.connected_component_size)
 
         blast_radius = (len(all_affected) / cc_size * 100) if cc_size > 0 else 0.0
@@ -156,19 +157,16 @@ class ImpactAnalyzer:
     ) -> list[ImpactChain]:
         """
         Find short paths from each affected file back to the mutated source.
-        Uses simple shortest-path traversal on the reversed graph.
+        Edges point dependent -> dependency; traverse the original graph.
         """
         chains: list[ImpactChain] = []
-        rev_graph = self.graph.reverse(copy=False)
 
         for affected in affected_files:
             if len(chains) >= max_chains:
                 break
             try:
-                path = nx.shortest_path(rev_graph, affected, mutated_file)
-                # Reverse: source -> ... -> mutated
-                forward_path = list(reversed(path))
-                chain = ImpactChain(chain=forward_path, length=len(forward_path) - 1)
+                path = nx.shortest_path(self.graph, affected, mutated_file)
+                chain = ImpactChain(chain=path, length=len(path) - 1)
                 chains.append(chain)
             except (nx.NetworkXNoPath, nx.NodeNotFound):
                 continue
