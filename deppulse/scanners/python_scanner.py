@@ -65,7 +65,7 @@ class PySymbolVisitor(ast.NodeVisitor):
                         fully_qualified=method_qualified,
                     )
                 )
-        self.generic_visit(node)
+        # Method symbols are already recorded above; do not revisit them as functions.
 
 
 class PythonScanner(BaseScanner):
