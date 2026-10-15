@@ -120,13 +120,6 @@ class TestSelector:
                 else:
                     candidate_tests[test_path] = (distance, 1)
 
-        # Also handle changed symbols that aren't whole-file changes
-        symbol_covered: set[str] = set()
-        for sym in changed_symbols:
-            # Try to find callers of this specific symbol
-            # (This would use UnifiedIR.find_callers in the full implementation)
-            symbol_covered.add(sym.symbol_name)
-
         # -- Step 3: Rank by distance, keep closest --
         # Sort: primary key = min_distance, secondary = count (more symbols = better)
         sorted_tests = sorted(
@@ -139,37 +132,30 @@ class TestSelector:
         selected_tests = [t[0] for t in selected]
         max_blast_reached = len(sorted_tests) > max_blast
 
-        # -- Step 4: Add convention-based tests for files not in graph --
+        # Only select conventional tests that exist; re-rank all candidates.
         convention_tests = self._convention_tests_for_files(changed_files)
         for ct in convention_tests:
-            if ct not in candidate_tests:
-                candidate_tests[ct] = (999, 1)  # convention = far distance
-                sorted_tests.append((ct, (999, 1)))
-
-        # Re-sort with convention tests
-        if convention_tests:
-            selected_sorted = sorted(
-                [(t[0], t[1]) for t in sorted_tests if t[0] in set(selected_tests) or t[0] in convention_tests],
-                key=lambda x: (x[1][0], -x[1][1]),
-            )[:max_blast]
-            selected_tests = [t[0] for t in selected_sorted if t[0] in candidate_tests]
+            candidate_tests.setdefault(ct, (999, 1))
+        sorted_tests = sorted(candidate_tests.items(), key=lambda item: (item[1][0], -item[1][1], item[0]))
+        selected_tests = [path for path, _ in sorted_tests[:max_blast]]
+        max_blast_reached = len(sorted_tests) > max_blast
 
         # -- Step 5: Compute coverage confidence --
         # confidence = % of changed symbols that reach at least one selected test
         total_symbols = len(changed_symbols)
         if total_symbols > 0:
             # A symbol is "covered" if we found any test that depends on its file
-            covered_symbols = set()
+            covered_symbols = 0
             for sym in changed_symbols:
                 # Check if the file containing this symbol is covered by selected tests
                 sym_file = self._find_file_for_symbol(sym)
                 if sym_file:
                     for test_path in selected_tests:
                         if self._test_covers_file(test_path, sym_file):
-                            covered_symbols.add(sym.symbol_name)
+                            covered_symbols += 1
                             break
 
-            coverage_confidence = len(covered_symbols) / total_symbols
+            coverage_confidence = covered_symbols / total_symbols
         else:
             # No symbol data — use file-level coverage
             covered_files = set()
@@ -180,21 +166,12 @@ class TestSelector:
                         break
             coverage_confidence = len(covered_files) / max(len(changed_files), 1)
 
-        # -- Step 6: Determine if confidence is too low --
-        low_confidence_warning = coverage_confidence < 0.5
-
-        # Fallback behavior: if confidence is very low, include convention tests
-        if low_confidence_warning and convention_tests:
-            for ct in convention_tests:
-                if ct not in selected_tests:
-                    selected_tests.append(ct)
-
         return TestSelectionResult(
             changed_files=changed_files,
             selected_tests=sorted(selected_tests),
             by_strategy={
-                "graph": sorted([t[0] for t in selected if t[0] in set(selected_tests)]),
-                "convention": sorted(convention_tests),
+                "graph": sorted(path for path in selected_tests if path in {p for p, v in candidate_tests.items() if v[0] != 999}),
+                "convention": sorted(path for path in convention_tests if path in selected_tests),
                 "pattern": [],
             },
             total_affected=len(selected_tests),
@@ -220,9 +197,7 @@ class TestSelector:
             if normalized in self.graph:
                 graph_changed.append(normalized)
             else:
-                ct = convention_test_path(normalized)
-                if ct:
-                    convention_tests.add(ct)
+                convention_tests.update(self._convention_tests_for_files([normalized]))
 
         if graph_changed:
             analyzer = ImpactAnalyzer(self.graph)
@@ -330,44 +305,22 @@ class TestSelector:
         tests: list[str] = []
         for f in changed_files:
             ct = convention_test_path(f)
-            if ct:
+            if ct and (ct in self.graph or (self.config.project_root / ct).is_file()):
                 tests.append(ct)
-        return tests
+        return sorted(set(tests))
 
 
 def convention_test_path(source_path: str) -> str | None:
-    """
-    Map a source file path to its conventional test file path.
-
-    Examples
-    --------
-    >>> convention_test_path("src/foo.py")
-    'tests/test_foo.py'
-    >>> convention_test_path("deppulse/core/analyzer.py")
-    'tests/test_analyzer.py'
-    >>> convention_test_path("tests/test_foo.py")
-    None  # already a test file
-    """
-    normalized = source_path.replace("\\", "/")
-
-    if normalized.startswith("./"):
-        normalized = normalized[2:]
-
-    name = os.path.basename(normalized)
-    for pattern in ["test_*.py", "*_test.py", "Test*.java", "*Test.java", "*Spec.kt"]:
-        if fnmatch.fnmatch(name, pattern):
-            return None
-
+    """Conventional Python test candidate; callers must verify existence."""
+    normalized = source_path.replace("\\", "/").removeprefix("./")
     parts = normalized.split("/")
-    filename = parts[-1]
-    base_name = filename.rsplit(".", 1)[0] if "." in filename else filename
-
-    test_dir = "tests"
-    sub_parts = parts[1:] if parts[0] == "src" and len(parts) > 1 else parts[:-1]
-    test_filename = f"test_{base_name}.py"
-    test_rel = "/".join(sub_parts + [test_filename]) if sub_parts else f"{test_dir}/{test_filename}"
-
-    return test_rel
+    if not normalized.endswith(".py") or not parts[-1]:
+        return None
+    name = parts[-1]
+    if name.startswith("test_") or name.endswith("_test.py") or "tests" in parts:
+        return None
+    subdirs = parts[1:-1] if parts[0] == "src" else []
+    return "/".join(["tests", *subdirs, f"test_{name}"])
 
 
 def get_all_test_files(project_root: Path, config: DepPulseConfig) -> list[str]:
