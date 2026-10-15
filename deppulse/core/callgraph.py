@@ -86,31 +86,46 @@ def _build_symbol_index(scan_results: list[ScanResult]) -> dict[str, list[Symbol
 
 
 class _PyCallVisitor(ast.NodeVisitor):
-    """Extract function/class/method call targets from Python AST."""
+    """Collect Python calls together with their lexical caller identity.
 
-    def __init__(self, local_names: set[str]) -> None:
-        super().__init__()
-        self.local_names = local_names
-        self.calls: list[str] = []  # simple names of called functions
+    Nested functions, lambdas, and dynamically-dispatched receivers are not
+    guessed: the current scanner only indexes top-level functions and methods.
+    """
 
-    def visit_call(self, node: ast.Call) -> None:
-        # Get the callable name
-        if isinstance(node.func, ast.Name):
-            self.calls.append(node.func.id)
-        elif isinstance(node.func, ast.Attribute):
-            self.calls.append(node.func.attr)
-        self.generic_visit(node)
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, ast.expr, int]] = []
+        self._owner: str | None = None
+        self._class_name: str | None = None
 
-    def visit_functiondef(self, node: ast.FunctionDef) -> None:
-        self.local_names.add(node.name)
-        self.generic_visit(node)
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        if self._owner is not None:
+            return
+        previous = self._class_name
+        self._class_name = node.name
+        for item in node.body:
+            if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                self.visit(item)
+        self._class_name = previous
 
-    def visit_asyncfunctiondef(self, node: ast.AsyncFunctionDef) -> None:
-        self.local_names.add(node.name)
-        self.generic_visit(node)
+    def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
+        if self._owner is not None:
+            return
+        self._owner = (
+            f"method:{self._class_name}.{node.name}" if self._class_name
+            else f"function:{node.name}"
+        )
+        for item in node.body:
+            self.visit(item)
+        self._owner = None
 
-    def visit_classdef(self, node: ast.ClassDef) -> None:
-        self.local_names.add(node.name)
+    visit_AsyncFunctionDef = visit_FunctionDef
+
+    def visit_Lambda(self, node: ast.Lambda) -> None:
+        return
+
+    def visit_Call(self, node: ast.Call) -> None:
+        if self._owner is not None:
+            self.calls.append((self._owner, node.func, node.lineno))
         self.generic_visit(node)
 
 
@@ -118,78 +133,107 @@ def _resolve_python_calls(
     scan_result: ScanResult,
     symbol_index: dict[str, list[Symbol]],
 ) -> list[SymbolCall]:
-    """
-    Parse a Python file's AST and resolve symbol-level call edges.
-
-    This uses ast.NodeVisitor for name matching against the known symbol index
-    and local function definitions. Confidence is AST for all resolved edges.
-    """
-    edges: list[SymbolCall] = []
-    content = ""
-
+    """Resolve local and explicitly imported Python calls conservatively."""
     try:
-
-        abs_path = Path(scan_result.absolute_path)
-        if abs_path.exists():
-            content = abs_path.read_text(encoding="utf-8")
-    except OSError:
-        return edges
-
-    if not content:
-        return edges
-
-    try:
+        content = Path(scan_result.absolute_path).read_text(encoding="utf-8")
         tree = ast.parse(content)
-    except SyntaxError:
-        return edges
+    except (OSError, UnicodeError, SyntaxError, ValueError):
+        return []
 
-    local_names: set[str] = set()
-    visitor = _PyCallVisitor(local_names)
+    local = {sym.fully_qualified: sym for sym in symbol_index.get(scan_result.file_path, [])}
+    indexed = {
+        path: {sym.fully_qualified: sym for sym in symbols}
+        for path, symbols in symbol_index.items()
+    }
+
+    def module_file(module: str, level: int = 0) -> str | None:
+        if level:
+            package = scan_result.file_path.split("/")[:-1]
+            if level - 1 > len(package):
+                return None
+            prefix = package[:len(package) - (level - 1)]
+            parts = prefix + (module.split(".") if module else [])
+        else:
+            parts = module.split(".") if module else []
+        if not parts:
+            return None
+        module_path = "/".join(parts)
+        names = (f"{module_path}.py", f"{module_path}/__init__.py")
+        if level:
+            matches = [path for path in indexed if path in names]
+        else:
+            matches = [
+                path for path in indexed
+                if path in names or any(path.endswith("/" + name) for name in names)
+            ]
+        return matches[0] if len(matches) == 1 else None
+
+    module_aliases: dict[str, str] = {}
+    imported_symbols: dict[str, tuple[str, str]] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                target = module_file(alias.name)
+                if target and (alias.asname or "." not in alias.name):
+                    module_aliases[alias.asname or alias.name] = target
+        elif isinstance(node, ast.ImportFrom):
+            target = module_file(node.module or "", node.level)
+            for alias in node.names:
+                if alias.name == "*":
+                    continue
+                name = alias.asname or alias.name
+                if target:
+                    imported_symbols[name] = (target, alias.name)
+                else:
+                    nested = module_file(
+                        f"{node.module}.{alias.name}" if node.module else alias.name,
+                        node.level,
+                    )
+                    if nested:
+                        module_aliases[name] = nested
+
+    visitor = _PyCallVisitor()
     visitor.visit(tree)
-
-    # Build a name -> Symbol map across the whole project
-    name_to_symbols: dict[str, list[Symbol]] = {}
-    for sym_list in symbol_index.values():
-        for sym in sym_list:
-            # Use base name (last segment) as key
-            base = sym.name
-            name_to_symbols.setdefault(base, []).append(sym)
-
-    # Also collect local names defined in this file
-    for sym in symbol_index.get(scan_result.file_path, []):
-        if sym.symbol_type in (SymbolType.FUNCTION, SymbolType.METHOD, SymbolType.CLASS):
-            local_names.add(sym.name)
-
-    for call_name in visitor.calls:
-        # Try local first, then project-wide
-        if call_name in local_names:
-            local_syms = [s for s in symbol_index.get(scan_result.file_path, []) if s.name == call_name]
-            for callee in local_syms:
-                edges.append(
-                    SymbolCall(
-                        caller=callee,
-                        callee=callee,
-                        call_site=(scan_result.file_path, 0),
-                        is_polymorphic=False,
-                        is_external=False,
-                        confidence=ConfidenceLevel.AST,
-                        confidence_source=ConfidenceSource.STATIC_AST,
-                    )
+    edges: list[SymbolCall] = []
+    for owner_fqn, expression, line in visitor.calls:
+        caller = local.get(owner_fqn)
+        if caller is None:
+            continue
+        callee: Symbol | None = None
+        if isinstance(expression, ast.Name):
+            name = expression.id
+            callee = local.get(f"function:{name}") or local.get(f"class:{name}")
+            if callee is None and name in imported_symbols:
+                target_file, original_name = imported_symbols[name]
+                target_symbols = indexed[target_file]
+                callee = (
+                    target_symbols.get(f"function:{original_name}")
+                    or target_symbols.get(f"class:{original_name}")
                 )
-        elif call_name in name_to_symbols:
-            for callee in name_to_symbols[call_name]:
-                edges.append(
-                    SymbolCall(
-                        caller=callee,
-                        callee=callee,
-                        call_site=(scan_result.file_path, 0),
-                        is_polymorphic=False,
-                        is_external=callee.file_path != scan_result.file_path,
-                        confidence=ConfidenceLevel.AST,
-                        confidence_source=ConfidenceSource.STATIC_AST,
-                    )
-                )
-
+        elif isinstance(expression, ast.Attribute) and isinstance(expression.value, ast.Name):
+            receiver = expression.value.id
+            method = expression.attr
+            if receiver in {"self", "cls"} and owner_fqn.startswith("method:"):
+                class_name = owner_fqn.removeprefix("method:").split(".", 1)[0]
+                callee = local.get(f"method:{class_name}.{method}")
+            elif receiver in module_aliases:
+                callee = indexed[module_aliases[receiver]].get(f"function:{method}")
+            elif local.get(f"class:{receiver}"):
+                callee = local.get(f"method:{receiver}.{method}")
+            elif receiver in imported_symbols:
+                target_file, original_name = imported_symbols[receiver]
+                callee = indexed[target_file].get(f"method:{original_name}.{method}")
+        if callee is None:
+            continue
+        edges.append(SymbolCall(
+            caller=caller,
+            callee=callee,
+            call_site=(scan_result.file_path, line),
+            is_polymorphic=False,
+            is_external=caller.file_path != callee.file_path,
+            confidence=ConfidenceLevel.AST,
+            confidence_source=ConfidenceSource.STATIC_AST,
+        ))
     return edges
 
 
@@ -375,7 +419,7 @@ class CallGraphBuilder:
         seen: set[tuple[str, str]] = set()
         unique_edges: list[SymbolCall] = []
         for edge in all_edges:
-            key = (edge.caller.fully_qualified, edge.callee.fully_qualified)
+            key = (edge.caller.file_path, edge.caller.fully_qualified, edge.callee.file_path, edge.callee.fully_qualified)
             if key not in seen:
                 seen.add(key)
                 unique_edges.append(edge)
@@ -430,23 +474,20 @@ class CallGraphBuilder:
             return 0
 
         # Build adjacency list: callee -> callers (reversed for BFS from leaves)
-        caller_map: dict[str, set[str]] = {}
-        callee_map: dict[str, set[str]] = {}
+        caller_map: dict[tuple[str, str], set[tuple[str, str]]] = {}
         for edge in edges:
-            fq = edge.caller.fully_qualified
-            callee_fq = edge.callee.fully_qualified
-            caller_map.setdefault(fq, set()).add(callee_fq)
-            callee_map.setdefault(callee_fq, set()).add(fq)
+            caller_id = (edge.caller.file_path, edge.caller.fully_qualified)
+            callee_id = (edge.callee.file_path, edge.callee.fully_qualified)
+            caller_map.setdefault(caller_id, set()).add(callee_id)
 
         max_depth = 0
-        # BFS from each node as root
-        for start_fq in caller_map:
-            visited: set[str] = {start_fq}
-            q: deque[tuple[str, int]] = deque([(start_fq, 1)])
+        for start_id in caller_map:
+            visited = {start_id}
+            q = deque([(start_id, 1)])
             while q:
                 node, depth = q.popleft()
                 max_depth = max(max_depth, depth)
-                for neighbor in caller_map.get(node, []):
+                for neighbor in caller_map.get(node, ()):
                     if neighbor not in visited:
                         visited.add(neighbor)
                         q.append((neighbor, depth + 1))
@@ -503,16 +544,14 @@ def callgraph_to_mermaid(cg_result: CallGraphResult, *, max_nodes: int = 100) ->
     for lang, color in colors.items():
         lines.append(f"    classDef lang_{lang.value} fill:#{color},color:#fff,stroke:#{color}")
 
-    # Add edges
+    node_ids = {
+        (sym.file_path, sym.fully_qualified): i
+        for i, sym in enumerate(cg_result.nodes[:shown])
+    }
     for edge in cg_result.edges:
-        caller_idx = None
-        callee_idx = None
-        for i, sym in enumerate(cg_result.nodes):
-            if sym.fully_qualified == edge.caller.fully_qualified:
-                caller_idx = i
-            if sym.fully_qualified == edge.callee.fully_qualified:
-                callee_idx = i
-        if caller_idx is not None and callee_idx is not None and caller_idx < max_nodes and callee_idx < max_nodes:
+        caller_idx = node_ids.get((edge.caller.file_path, edge.caller.fully_qualified))
+        callee_idx = node_ids.get((edge.callee.file_path, edge.callee.fully_qualified))
+        if caller_idx is not None and callee_idx is not None:
             edge_label = "virtual" if edge.is_polymorphic else ("ext" if edge.is_external else "")
             if edge_label:
                 lines.append(f"    n{caller_idx} -->|\"{edge_label}\"| n{callee_idx}")
@@ -548,9 +587,13 @@ def callgraph_to_dot(cg_result: CallGraphResult, *, title: str = "Call Graph") -
         style = "dashed" if sym.symbol_type == SymbolType.METHOD else "solid"
         lines.append(f'    n{i} [label="{label}", color="{color}", style={style}];')
 
+    node_ids = {
+        (sym.file_path, sym.fully_qualified): i
+        for i, sym in enumerate(cg_result.nodes)
+    }
     for edge in cg_result.edges:
-        ci = next((i for i, s in enumerate(cg_result.nodes) if s.fully_qualified == edge.caller.fully_qualified), None)
-        ki = next((i for i, s in enumerate(cg_result.nodes) if s.fully_qualified == edge.callee.fully_qualified), None)
+        ci = node_ids.get((edge.caller.file_path, edge.caller.fully_qualified))
+        ki = node_ids.get((edge.callee.file_path, edge.callee.fully_qualified))
         if ci is not None and ki is not None:
             attrs = []
             if edge.is_polymorphic:
@@ -600,6 +643,8 @@ def callgraph_to_json(cg_result: CallGraphResult) -> dict:
             {
                 "caller": e.caller.fully_qualified,
                 "callee": e.callee.fully_qualified,
+                "caller_file": e.caller.file_path,
+                "callee_file": e.callee.file_path,
                 "call_site": {"file_path": e.call_site[0], "line": e.call_site[1]},
                 "is_polymorphic": e.is_polymorphic,
                 "is_external": e.is_external,
